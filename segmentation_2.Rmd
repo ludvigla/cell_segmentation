@@ -130,7 +130,8 @@ OverlapImages <- function(
   if (length(dim(ima)) == 3 | length(dim(imb)) == 3) {
     stop("Invalid dims for ima or imb")
   }
-  ima <- bwlabel(ima); imb <- bwlabel(imb)
+  if (length(table(ima)) <= 2) stop("ima has not been labeled")
+  if (length(table(imb)) <= 2) stop("imb has not been labeled")
   # Summarize overlap across images
   if (verbose) cat(paste0("Calculating intersect between images \n"))
   d <- data.frame(a = as.numeric(ima), b = as.numeric(imb))
@@ -186,9 +187,10 @@ OverlapImages <- function(
 
 Apply previoulsy established segmentation workflow to uncropped and raw TIF images for each channel
 
-```{r}
-img.files <- c("/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/images/V13/olig2.tif", "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/images/V13/egfp.tif", "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/images/V13/neun.tif")
-
+```{r segmentation_run}
+img.files <- c("~/Michael_Ratz/cell_segmentation/data/olig2.tif", 
+               "~/Michael_Ratz/cell_segmentation/data/egfp.tif", 
+               "~/Michael_Ratz/cell_segmentation/data/neun.tif")
 
 segmented <- list()
 for (i in 1:length(img.files)) {
@@ -201,16 +203,18 @@ for (i in 1:length(img.files)) {
     do.fast = TRUE, 
     verbose = TRUE)
 }
+
+names(segmented) <- c("Olig2", "Egfp", "Neun")
+
 ```
 
 # Find overlapping signals
-The next step will be to find out what wignals are overlapping, but first we can just visualize the results from the three segmented images. Since we have three targets, we can encode them directly in RGB channels. You can already see some overlapping cells. We can ignore the cells along the edges for now, these will not be present when we run the whole image at once.
 
-```{r}
+The next step will be to find out what signals are overlapping, but first we can just visualize the results from the three segmented images. Since we have three targets, we can encode them directly in RGB channels. You can already see some overlapping cells. We can ignore the cells along the edges for now, these will not be present when we run the whole image at once.
+
+```{r count_features}
 cat("Total number of oligodendrocytes: ", length(table(segmented[[1]])), "\n")
-
 cat("Total number of EGFP: ", length(table(segmented[[2]])), "\n")
-
 cat("Total number of neurons: ", length(table(segmented[[3]])), "\n")
 
 # par(mfrow = c(3, 1))
@@ -225,7 +229,7 @@ text(x = 10, y = 20, label = "Neun", adj = c(0, 1), col = "orange", cex = 1.5)
 ```
 
 # Display combined stainings
-```{r}
+```{r combined_stains}
 im <- rgbImage(red = segmented[[1]], green = segmented[[2]], blue = segmented[[3]])
 display(im, method = "raster")
 text(x = 10, y = 20, label = "combined stainings", adj = c(0, 1), col = "orange", cex = 1.5)
@@ -241,7 +245,7 @@ controls to estimate crosstalk between olig2 and neun channels and the subset of
 olig2 + neun = pixels with positive signal for both NeuN and Olig2
 olig2 + neun + egfp = pixels with positive signal for both NeuN and Olig2 and egfp
 
-```{r}
+```{r extract_overlapping_cells}
 # olig2 and egfp
 oligodendrocyte <- EBImage::channel(im, "red") > 0 & EBImage::channel(im, "green") > 0
 
@@ -280,7 +284,7 @@ text(x = 10, y = 20, label = "overlapping Neun and Olig2 and EGFP", adj = c(0,1)
 
 # Relabel the new shapes to get an estimate on the number cells of the three categories.
 
-```{r}
+```{r }
 par(mfrow = c(1, 4))
 fts.shape.neurons <- computeFeatures.shape(bwlabel(neuron))
 cat("Total number estimated of Egfp+ neurons: ", nrow(fts.shape.neurons), "\n")
@@ -308,6 +312,7 @@ If we sum up these values, the total number of overlapping shapes (cells) is lar
 
 In the image below I have plotted the Olig2 and Egfp signals and even though most of the time you see a quite decent overlap, there are cases where overlap looks pretty bad (yellow color = intersecting cells).
 
+
 ```{r}
 x <- 1000 
 y <- 1400
@@ -322,6 +327,7 @@ text(x = 10, y = 20, label = "Olig2", adj = c(0,1), col = "orange", cex = 2)
 ```
 
 # estimate intersect of overlapping cells
+
 for cells with multiple overlaps, keep only the top hit
 for each pair of overlapping shapes A and B, estimate the overlap as intersect(A, B)/min(A, B)
 return cells with an overlap of at least 50%
@@ -336,21 +342,24 @@ c(olig2_neun_egfp, Olig2_Neun_Egfp_inds) %<-% OverlapImages(EBImage::channel(im,
 
 longer object length is not a multiple of shorter object lengthError in `$<-.data.frame`(`*tmp*`, "keep", value = new("Image", .Data = c(TRUE,  : replacement has 4464 rows, data has 2941
 
-```{r}
-# overlap between olig2 and egfp
-c(oligodendrocyte, Olig2_inds) %<-% OverlapImages(EBImage::channel(im, "red"), EBImage::channel(im, "green"), return.indices = T)
-
-#overlap between neun and egfp
-c(neuron, Neun_inds) %<-% OverlapImages(EBImage::channel(im, "blue"), EBImage::channel(im, "green"), return.indices = T)
+```{r overlap_computation, fig.height=6, fig.width=6}
 
 # overlap between olig2 and neun
-c(olig2_neun, Olig2_Neun_inds) %<-% OverlapImages(EBImage::channel(im, "red"), EBImage::channel(im, "blue"), return.indices = T)
+c(olig2_neun, Olig2_Neun_inds) %<-% OverlapImages(segmented[["Olig2"]], segmented[["Neun"]], return.indices = T)
+segmented[["Olig2"]] <- rmObjects(segmented[["Olig2"]], index = Olig2_Neun_inds$inda)
+segmented[["Neun"]] <- rmObjects(segmented[["Neun"]], index = Olig2_Neun_inds$indb)
+
+# overlap between olig2 and egfp
+c(oligodendrocyte, Olig2_inds) %<-% OverlapImages(segmented[["Olig2"]], segmented[["Egfp"]], return.indices = T)
+
+#overlap between neun and egfp
+c(neuron, Neun_inds) %<-% OverlapImages(segmented[["Neun"]], segmented[["Egfp"]], return.indices = T)
 
 # overlap between olig2_neun and egfp
-c(olig2_neun_egfp, Olig2_Neun_Egfp_inds) %<-% OverlapImages(EBImage::channel(im, "red"), EBImage::channel(im, "blue"), EBImage::channel(im, "green"), return.indices = T)
+c(olig2_neun_egfp, Olig2_Neun_Egfp_inds) %<-% OverlapImages(olig2_neun, segmented[["Egfp"]], return.indices = T)
 
 # egfp only
-unknown <- rmObjects(EBImage::channel(im, "green"), index = as.numeric(c(Olig2_inds$indb, Neun_inds$indb)))
+unknown <- rmObjects(segmented[["Egfp"]], index = as.numeric(c(Olig2_inds$indb, Neun_inds$indb)))
 
 # par(mfrow = c(4, 1))
 display(dilate(oligodendrocyte), method = "raster")
@@ -366,52 +375,47 @@ text(x = 10, y = 20, label = "overlapping Neun and Olig2 and EGFP", adj = c(0,1)
 ```
 
 
-```{r}
-fts.shape.neurons <- computeFeatures.shape(neuron)
+```{r estimate_counts}
+
 fts.moment.neurons <- computeFeatures.moment(neuron)
-cat("Total number of estimated Egfp+ neurons: ", nrow(fts.shape.neurons), "\n")
+cat("Total number of estimated Egfp+ neurons: ", nrow(fts.moment.neurons), "\n")
 
-fts.shape.oligodenrocytes <- computeFeatures.shape(oligodendrocyte)
 fts.moment.oligodenrocytes <- computeFeatures.moment(oligodendrocyte)
-cat("Total number of estimated Egfp+ oligodendrocytes: ", nrow(fts.shape.oligodenrocytes), "\n")
+cat("Total number of estimated Egfp+ oligodendrocytes: ", nrow(fts.moment.oligodenrocytes), "\n")
 
-fts.shape.olig2_neun <- computeFeatures.shape(olig2_neun)
 fts.moment.olig2_neun <- computeFeatures.moment(olig2_neun)
-cat("Total number of overlapping Neun-Olig2: ", nrow(fts.shape.olig2_neun), "\n")
+cat("Total number of overlapping Neun-Olig2: ", nrow(fts.moment.olig2_neun), "\n")
 
-fts.shape.olig2_neun_egfp <- computeFeatures.shape(olig2_neun_egfp)
 fts.moment.olig2_neun_egfp <- computeFeatures.moment(olig2_neun_egfp)
 cat("Total number of overlapping Neun-Olig2-EGFP: ", nrow(fts.moment.olig2_neun_egfp), "\n")
 
-fts.shape.unknown <- computeFeatures.shape(unknown)
 fts.moment.unknown <- computeFeatures.moment(unknown)
-cat("Total number of unknown: ", nrow(fts.shape.unknown), "\n")
+cat("Total number of unknown: ", nrow(fts.moment.unknown), "\n")
 
-cat("Total number of Egfp+ cells after cleaning: ", sum(nrow(fts.shape.neurons) + nrow(fts.shape.oligodenrocytes) + nrow(fts.shape.unknown) + nrow(fts.shape.olig2_neun_egfp)))
+cat("Total number of Egfp+ cells after cleaning: ", nrow(fts.moment.neurons) + nrow(fts.moment.oligodenrocytes) + nrow(fts.moment.unknown) )
+
 ```
 
 
-There are still a couple of EGFP cells too many compared to the previously detected ones (4166-4025) = 141: 
-Total number of Egfp+ cells after cleaning:  4166
-Total number of EGFP:  4025 
-
-These are most likely overlapping Olig2, Neun and Egfp which have been counted twice. By removing the overlapping Olig2 and Neun we can probably get rid of these, but these are quite few so maybe it’s good enough?
+Total number of Egfp+ cells after cleaning:  3758
 
 We can now extract the feature coordinates and labels to have a data.frame format that is a bit easier to work with
 
-```{r}
+```{r pot_celltypes, fig.width=14, fig.height=12}
 df <- rbind(setNames(cbind(data.frame(fts.moment.neurons[, 1:2]), "neuron"), nm = c("x", "y", "celltype")),
             setNames(cbind(data.frame(fts.moment.oligodenrocytes[, 1:2]), "oligodendrocyte"), nm = c("x", "y", "celltype")),
             setNames(cbind(data.frame(fts.moment.unknown[, 1:2]), "unknown"), nm = c("x", "y", "celltype")),
             setNames(cbind(data.frame(fts.moment.olig2_neun[, 1:2]), "neuron/oligo"), nm = c("x", "y", "celltype")))
 
 ggplot(df, aes(x, 3000 - y, color = celltype)) + 
-  geom_point(size = 0.5) +
+  geom_point(size = 0.3) +
   theme_void() +
   theme(plot.background = element_rect(fill = "black", color = "black"), 
-        legend.text = element_text(colour = "white")) # +
-  scale_color_manual(values = c("neuron" = "green", "oligodendrocyte" = "red", "unknown" = "blue")) # +
-  facet_wrap(~celltype, ncol = 1)
+        legend.text = element_text(colour = "white"))  +
+  scale_color_manual(values = c("neuron" = "green", "oligodendrocyte" = "red", "unknown" = "blue", "neuron/oligo" = "lightgray"))  +
+  coord_flip() +
+  scale_y_reverse() +
+  facet_wrap(~celltype, ncol = 2)
   
 ```
 
