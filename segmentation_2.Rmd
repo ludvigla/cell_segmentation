@@ -1,0 +1,809 @@
+---
+title: "cell_segmentation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(EBImage)
+library(ggplot2)
+library(cowplot)
+library(magrittr)
+library(zeallot)
+```
+
+# Define functions
+```{r}
+# Define filter function for later
+filter_cells <- function(im, brush.size = 9, verbose = FALSE) {
+  if (verbose) cat("Applying 2D convolution filter to image ... \n")
+  f = makeBrush(brush.size, shape = 'disc', step = FALSE)
+  f = f/sum(f)
+  imfiltered <- filter2(im, filter = f)
+  return(imfiltered)
+}
+
+
+# Define correction function for later
+correct_cells <- function(im, imfiltered, verbose = FALSE) {
+  if (class(im) != "Image") stop(paste0("Invalid input format of im: ", class(im)))
+  if (class(imfiltered) != "Image") stop(paste0("Invalid input format of imfiltered: ", class(imfiltered)))
+  if (verbose) cat("Correcting image ... \n")
+  imcorrected <- (im - imfiltered) %>% normalize()
+  return(imcorrected)
+}
+
+# Define threshold function for later
+threshold_cells <- function(imcorrected, nsd = 2, verbose = FALSE) {
+  if (class(imcorrected) != "Image") stop(paste0("Invalid input format: ", class(imcorrected)))
+  if (verbose) cat("Thresholding cells ... \n")
+  thr <- mean(imcorrected) + nsd*sd(imcorrected)
+  imthreshold <- imcorrected > thr
+  return(imthreshold)
+}
+
+# Define cleaning function for later
+clean_cells <- function(imthreshold, ftr = "s.area", thr = 5, do.fast = FALSE, verbose = FALSE) {
+  if (class(imthreshold) != "Image") stop(paste0("Invalid input format: ", class(imthreshold)))
+  if (verbose) cat("Cleaning up unwanted speckles ... \n")
+  imthreshold <- bwlabel(imthreshold)
+  if (do.fast & ftr == "s.area") {
+    inds <- which(table(imthreshold)[-1] < thr)
+  } else if (do.fast & ftr != "s.area") (
+    stop(paste0("Invalid option ", ftr, " for ftr. Only ftr = 's.area' can be used for fast shape extraction."))
+  ) else {
+    fts.shape <- shape_extractor(x = imthreshold)
+    stopifnot(ftr %in% colnames(fts.shape))
+    inds <- which(fts.shape[, ftr] <= thr)
+  }
+  imclean <- rmObjects(x = imthreshold, index = inds)
+  return(imclean)
+}
+
+# Define watershed function for later
+watershed_cells <- function(imclean, tol = 0.1, verbose = FALSE) {
+  if (class(imclean) != "Image") stop(paste0("Invalid input format: ", class(imclean)))
+  if (verbose) cat("Applying watershed ... \n")
+  imwatershed <- watershed(x = EBImage::distmap(imclean), tolerance = tol)
+  return(imwatershed)
+}
+
+# Now we have a pretty decent workflow for segmenting cells so let’s combine the 5 steps into one function.
+SegmentCells <- function(
+  impath,
+  crop.window = NULL,
+  brush.size = 9,
+  nsd = 3,
+  feature = "s.area",
+  feature.threshold = 5,
+  do.fast = FALSE,
+  tolerance = 0.1,
+  return.all = FALSE,
+  verbose = FALSE
+) {
+  if (!file.exists(impath)) stop(paste0("File ", impath, " does not exist \n"))
+  cells <- readImage(impath)
+  cells <- EBImage::normalize(cells)
+  
+  if (!is.null(crop.window)) {
+    if (!length(crop.window) == 4 & class(crop.window) %in% c("numeric", "integer")) stop("Invalid crop window \n")
+    cells <- cells[crop.window[1]:crop.window[2], crop.window[3]:crop.window[4]]
+  }
+  
+  cells_filtered <- filter_cells(cells, brush.size, verbose) # 1. filter 
+  cells_corrected <- correct_cells(cells, cells_filtered, verbose) # 2. correct 
+  cells_th <- threshold_cells(cells_corrected, nsd, verbose) # 3. threshold
+  cells_clean <- clean_cells(cells_th, feature, feature.threshold, do.fast, verbose) # 4. clean
+  cells_split <- watershed_cells(cells_clean, tolerance, verbose) # 5. watershed
+  
+  if (return.all) {
+    return(list(cells, cells_filtered, cells_corrected, cells_clean, cells_split))
+  } else {
+    return(cells_split)
+  }
+}
+
+# Define overlap function
+# select cells based on an overlap criteria to make sure that shapes that are split into multiple new shapes are not all included in the output
+# Only the shape with the highest overlap is kept and the overlap also have to be above a specified threshold (e.g. 50%)
+# The overlap between two shapes is defined as the area of the intersect divided by the area of the smallest shape.
+# for cells with multiple overlaps, keep only the top hit
+# for each pair of overlapping shapes A and B, estimate the overlap as intersect(A, B)/min(A, B)
+# return cells with an overlap of at least 50%
+
+overlap_fkn <- function(x, y, i) {
+  return(i/pmin(x, y))
+}
+
+OverlapImages <- function(
+  ima, 
+  imb, 
+  overlap.min = 0.5, 
+  return.merged = FALSE, 
+  return.indices = FALSE, 
+  verbose = FALSE
+) {
+  
+  if (length(dim(ima)) == 3 | length(dim(imb)) == 3) {
+    stop("Invalid dims for ima or imb")
+  }
+  ima <- bwlabel(ima); imb <- bwlabel(imb)
+  # Summarize overlap across images
+  if (verbose) cat(paste0("Calculating intersect between images \n"))
+  d <- data.frame(a = as.numeric(ima), b = as.numeric(imb))
+  d <- table(d) %>% as.matrix()
+  d <- d[-1, -1]
+  
+  # Extract area for image a and image b
+  area_a <- table(ima)[-1]
+  aa <- setNames(as.numeric(area_a), names(area_a))
+  area_b <- table(imb)[-1]
+  ab <- setNames(as.numeric(area_b), names(area_b))
+  if (verbose) cat(paste0("Finished calculating intersect between ", length(area_a), " shapes in image a and ", length(area_b), " shapes in image b \n"))
+  
+  # Collect indices for overlaping shapes
+  intersect_ab <- which(d > 0, arr.ind = T)
+  indices <- setNames(data.frame(apply(do.call(rbind, (lapply(1:nrow(intersect_ab), function(i) {
+    inds <- intersect_ab[i, ]
+    c(rownames(d)[inds[1]], colnames(d)[inds[2]], d[inds[1], inds[2]])
+  }))), 2, function(x) as.character(x)), stringsAsFactors = F), nm = c("ind.a", "ind.b", "intersect"))
+  
+  # Collect shape areas, indices and intersect
+  df <- data.frame(area.a = aa[indices$ind.a], area.b = ab[indices$ind.b], 
+                   inda = as.integer(indices$ind.a), indb = as.integer(indices$ind.b), 
+                   intersect = as.numeric(indices$intersect), stringsAsFactors = F)
+  
+  # Calculate overlap
+  if (verbose) cat(paste0("Calculating overlap between images using shape intersect \n"))
+  df$overlap <- overlap_fkn(x = df$area.a, y = df$area.b, i = df$intersect)
+  df$keep <- df$overlap > overlap.min
+  df <- subset(df, keep)
+  
+  # Clean up image a and image b
+  ima_clean <- rmObjects(ima, index = setdiff(as.integer(names(table(ima)[-1])), df$inda))
+  imb_clean <- rmObjects(imb, index = setdiff(as.integer(names(table(imb)[-1])), df$indb))
+  
+  # Should the clean images be merged?
+  if (return.merged) {
+    imres <- ima_clean | imb_clean
+  } else {
+    imres <- ima_clean & imb_clean
+  }
+  
+  # return extra data
+  if (return.indices) {
+    return(list(bwlabel(imres), df))
+  } else {
+    return(bwlabel(imres))
+  }
+}
+```
+
+# Segmentation workflow
+
+Apply previoulsy established segmentation workflow to uncropped and raw TIF images for each channel
+
+```{r}
+img.files <- c("/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/images/V13/olig2.tif", "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/images/V13/egfp.tif", "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/images/V13/neun.tif")
+
+
+segmented <- list()
+for (i in 1:length(img.files)) {
+  print(img.files[i])
+  segmented[[i]] <- SegmentCells(
+    impath = img.files[i], 
+    crop.window = NULL, # x axis crop between pos1 and pos2, y axis crop between pos3 and pos4
+    nsd = 2, 
+    feature.threshold = 4, 
+    do.fast = TRUE, 
+    verbose = TRUE)
+}
+```
+
+# Find overlapping signals
+The next step will be to find out what wignals are overlapping, but first we can just visualize the results from the three segmented images. Since we have three targets, we can encode them directly in RGB channels. You can already see some overlapping cells. We can ignore the cells along the edges for now, these will not be present when we run the whole image at once.
+
+```{r}
+cat("Total number of oligodendrocytes: ", length(table(segmented[[1]])), "\n")
+
+cat("Total number of EGFP: ", length(table(segmented[[2]])), "\n")
+
+cat("Total number of neurons: ", length(table(segmented[[3]])), "\n")
+
+# par(mfrow = c(3, 1))
+display(1 - segmented[[1]], method = "raster")
+text(x = 10, y = 20, label = "Olig2", adj = c(0, 1), col = "orange", cex = 1.5)
+
+display(1 - segmented[[2]], method = "raster")
+text(x = 10, y = 20, label = "EGFP", adj = c(0, 1), col = "orange", cex = 1.5)
+
+display(1 - segmented[[3]], method = "raster")
+text(x = 10, y = 20, label = "Neun", adj = c(0, 1), col = "orange", cex = 1.5)
+```
+
+# Display combined stainings
+```{r}
+im <- rgbImage(red = segmented[[1]], green = segmented[[2]], blue = segmented[[3]])
+display(im, method = "raster")
+text(x = 10, y = 20, label = "combined stainings", adj = c(0, 1), col = "orange", cex = 1.5)
+```
+
+# Extract cells with overlapping signals.
+
+neuron + EGFP = pixels with positive signal for both NeuN and EGFP
+oligodendrocyte + EGFP = pixels with positive signal for both Olig2 and EGFP
+unknown + EGFP = pixels with positive signal for EGFP but negative signal for Olig2 and NeuN
+
+controls to estimate crosstalk between olig2 and neun channels and the subset of egfp+ barcoded cells
+olig2 + neun = pixels with positive signal for both NeuN and Olig2
+olig2 + neun + egfp = pixels with positive signal for both NeuN and Olig2 and egfp
+
+```{r}
+# olig2 and egfp
+oligodendrocyte <- EBImage::channel(im, "red") > 0 & EBImage::channel(im, "green") > 0
+
+# neun and egfp
+neuron <- EBImage::channel(im, "blue") > 0 & EBImage::channel(im, "green") > 0
+
+# egfp and unknown (unknown = not olig2 AND not neun)
+unknown <- EBImage::channel(im, "green") > 0 & EBImage::channel(im, "blue") == 0 & EBImage::channel(im, "red") == 0
+
+# olig2 and neun (crosstalk)
+olig2_neun <- EBImage::channel(im, "red") > 0 & EBImage::channel(im, "blue") 
+
+# egfp and olig2 and neun (crosstalk and egfp)
+olig2_neun_egfp <- EBImage::channel(im, "red") > 0 & EBImage::channel(im, "blue") & EBImage::channel(im, "green") > 0
+
+# par(mfrow = c(5, 1))
+display(dilate(oligodendrocyte), method = "raster")
+text(x = 10, y = 20, label = "oligodendrocyte + EGFP", adj = c(0,1), col = "orange", cex = 1.5)
+
+display(dilate(neuron), method = "raster")
+text(x = 10, y = 20, label = "neurons + EGFP", adj = c(0,1), col = "orange", cex = 1.5)
+
+display(dilate(unknown), method = "raster")
+text(x = 10, y = 20, label = "unknown + EGFP", adj = c(0,1), col = "orange", cex = 1.5)
+
+oligneu <- rgbImage(red = dilate(oligodendrocyte), green = dilate(neuron), blue = dilate(unknown))
+display(oligneu, method = "raster")
+text(x = 10, y = 20, label = "(unknown [blue],  olgiodendrocytes[red] \n and neurons [green]) + EGFP", adj = c(0,1), col = "orange", cex = 1.5)
+
+display(dilate(olig2_neun), method = "raster")
+text(x = 10, y = 20, label = "overlapping Neun and Olig2", adj = c(0,1), col = "orange", cex = 1.5)
+
+display(dilate(olig2_neun_egfp), method = "raster")
+text(x = 10, y = 20, label = "overlapping Neun and Olig2 and EGFP", adj = c(0,1), col = "orange", cex = 1.5)
+```
+
+# Relabel the new shapes to get an estimate on the number cells of the three categories.
+
+```{r}
+par(mfrow = c(1, 4))
+fts.shape.neurons <- computeFeatures.shape(bwlabel(neuron))
+cat("Total number estimated of Egfp+ neurons: ", nrow(fts.shape.neurons), "\n")
+
+hist(fts.shape.neurons[, 1], breaks = 20)
+
+fts.shape.oligodenrocytes <- computeFeatures.shape(bwlabel(oligodendrocyte))
+cat("Total number estimated of Egfp+ oligodendrocytes: ", nrow(fts.shape.oligodenrocytes), "\n")
+
+hist(fts.shape.oligodenrocytes[, 1], breaks = 20)
+
+fts.shape.unknown <- computeFeatures.shape(bwlabel(unknown))
+cat("Total number estimated of Egfp+ unknown: ", nrow(fts.shape.unknown), "\n")
+
+hist(fts.shape.unknown[, 1], breaks = 20)
+
+fts.shape.oligoneuron <- computeFeatures.shape(bwlabel(olig2_neun_egfp))
+cat("Total number estimated of Egfp+/Olig2/NeuN+: ", nrow(fts.shape.oligoneuron), "\n")
+
+hist(fts.shape.oligoneuron[, 1], breaks = 20)
+```
+
+
+If we sum up these values, the total number of overlapping shapes (cells) is larger than the total number of detected nuclei. I noticed that when taking the overlapping set of pixels, you will often have partial overlaps. 1 Egfp cell can for example overlap with two different Olig2 cells which will generate two overlapping shapes while in reality you have only 1 or 0 overlapping signals. For this reason I think we have to be quite conservative and come up with some way to determine what is an overlapping signal and what is not.
+
+In the image below I have plotted the Olig2 and Egfp signals and even though most of the time you see a quite decent overlap, there are cases where overlap looks pretty bad (yellow color = intersecting cells).
+
+```{r}
+x <- 1000 
+y <- 1400
+
+#par(mfrow = c(1, 3))
+display(im[x:y, x:y, 1:2], method = "raster")
+text(x = 10, y = 20, label = "Olig2 [red] Egfp [green]", adj = c(0,1), col = "orange", cex = 2)
+display(EBImage::channel(im, "green")[x:y, x:y], method = "raster")
+text(x = 10, y = 20, label = "Egfp", adj = c(0,1), col = "orange", cex = 2)
+display(EBImage::channel(im, "red")[x:y, x:y], method = "raster")
+text(x = 10, y = 20, label = "Olig2", adj = c(0,1), col = "orange", cex = 2)
+```
+
+# estimate intersect of overlapping cells
+for cells with multiple overlaps, keep only the top hit
+for each pair of overlapping shapes A and B, estimate the overlap as intersect(A, B)/min(A, B)
+return cells with an overlap of at least 50%
+
+Now we can apply this overlap detection tool to pairs of segmented images. Remember that the segmented images are stored as different color channels in the object “im”, where red = Olig2, green = Egfp and blue = Neun.
+
+The unknown Egfp cells are here defined as the Egfp cells with neither Olig2 or Neun overlap. This still means that there could be some overlap, just smaller than 50%.
+
+*error* when running 
+# overlap between olig2_neun and egfp
+c(olig2_neun_egfp, Olig2_Neun_Egfp_inds) %<-% OverlapImages(EBImage::channel(im, "red"), EBImage::channel(im, "blue"), EBImage::channel(im, "green"), return.indices = T)
+
+longer object length is not a multiple of shorter object lengthError in `$<-.data.frame`(`*tmp*`, "keep", value = new("Image", .Data = c(TRUE,  : replacement has 4464 rows, data has 2941
+
+```{r}
+# overlap between olig2 and egfp
+c(oligodendrocyte, Olig2_inds) %<-% OverlapImages(EBImage::channel(im, "red"), EBImage::channel(im, "green"), return.indices = T)
+
+#overlap between neun and egfp
+c(neuron, Neun_inds) %<-% OverlapImages(EBImage::channel(im, "blue"), EBImage::channel(im, "green"), return.indices = T)
+
+# overlap between olig2 and neun
+c(olig2_neun, Olig2_Neun_inds) %<-% OverlapImages(EBImage::channel(im, "red"), EBImage::channel(im, "blue"), return.indices = T)
+
+# overlap between olig2_neun and egfp
+c(olig2_neun_egfp, Olig2_Neun_Egfp_inds) %<-% OverlapImages(EBImage::channel(im, "red"), EBImage::channel(im, "blue"), EBImage::channel(im, "green"), return.indices = T)
+
+# egfp only
+unknown <- rmObjects(EBImage::channel(im, "green"), index = as.numeric(c(Olig2_inds$indb, Neun_inds$indb)))
+
+# par(mfrow = c(4, 1))
+display(dilate(oligodendrocyte), method = "raster")
+text(x = 10, y = 20, label = "oligodendrocyte + EGFP", adj = c(0,1), col = "orange", cex = 1.5)
+display(dilate(neuron), method = "raster")
+text(x = 10, y = 20, label = "neurons + EGFP", adj = c(0,1), col = "orange", cex = 1.5)
+display(dilate(unknown), method = "raster")
+text(x = 10, y = 20, label = "unknown + EGFP", adj = c(0,1), col = "orange", cex = 1.5)
+display(dilate(olig2_neun), method = "raster")
+text(x = 10, y = 20, label = "overlapping Neun and Olig2", adj = c(0,1), col = "orange", cex = 1.5)
+display(dilate(olig2_neun_egfp), method = "raster")
+text(x = 10, y = 20, label = "overlapping Neun and Olig2 and EGFP", adj = c(0,1), col = "orange", cex = 1.5)
+```
+
+
+```{r}
+fts.shape.neurons <- computeFeatures.shape(neuron)
+fts.moment.neurons <- computeFeatures.moment(neuron)
+cat("Total number of estimated Egfp+ neurons: ", nrow(fts.shape.neurons), "\n")
+
+fts.shape.oligodenrocytes <- computeFeatures.shape(oligodendrocyte)
+fts.moment.oligodenrocytes <- computeFeatures.moment(oligodendrocyte)
+cat("Total number of estimated Egfp+ oligodendrocytes: ", nrow(fts.shape.oligodenrocytes), "\n")
+
+fts.shape.olig2_neun <- computeFeatures.shape(olig2_neun)
+fts.moment.olig2_neun <- computeFeatures.moment(olig2_neun)
+cat("Total number of overlapping Neun-Olig2: ", nrow(fts.shape.olig2_neun), "\n")
+
+fts.shape.olig2_neun_egfp <- computeFeatures.shape(olig2_neun_egfp)
+fts.moment.olig2_neun_egfp <- computeFeatures.moment(olig2_neun_egfp)
+cat("Total number of overlapping Neun-Olig2-EGFP: ", nrow(fts.moment.olig2_neun_egfp), "\n")
+
+fts.shape.unknown <- computeFeatures.shape(unknown)
+fts.moment.unknown <- computeFeatures.moment(unknown)
+cat("Total number of unknown: ", nrow(fts.shape.unknown), "\n")
+
+cat("Total number of Egfp+ cells after cleaning: ", sum(nrow(fts.shape.neurons) + nrow(fts.shape.oligodenrocytes) + nrow(fts.shape.unknown) + nrow(fts.shape.olig2_neun_egfp)))
+```
+
+
+There are still a couple of EGFP cells too many compared to the previously detected ones (4166-4025) = 141: 
+Total number of Egfp+ cells after cleaning:  4166
+Total number of EGFP:  4025 
+
+These are most likely overlapping Olig2, Neun and Egfp which have been counted twice. By removing the overlapping Olig2 and Neun we can probably get rid of these, but these are quite few so maybe it’s good enough?
+
+We can now extract the feature coordinates and labels to have a data.frame format that is a bit easier to work with
+
+```{r}
+df <- rbind(setNames(cbind(data.frame(fts.moment.neurons[, 1:2]), "neuron"), nm = c("x", "y", "celltype")),
+            setNames(cbind(data.frame(fts.moment.oligodenrocytes[, 1:2]), "oligodendrocyte"), nm = c("x", "y", "celltype")),
+            setNames(cbind(data.frame(fts.moment.unknown[, 1:2]), "unknown"), nm = c("x", "y", "celltype")),
+            setNames(cbind(data.frame(fts.moment.olig2_neun[, 1:2]), "neuron/oligo"), nm = c("x", "y", "celltype")))
+
+ggplot(df, aes(x, 3000 - y, color = celltype)) + 
+  geom_point(size = 0.5) +
+  theme_void() +
+  theme(plot.background = element_rect(fill = "black", color = "black"), 
+        legend.text = element_text(colour = "white")) # +
+  scale_color_manual(values = c("neuron" = "green", "oligodendrocyte" = "red", "unknown" = "blue")) # +
+  facet_wrap(~celltype, ncol = 1)
+  
+```
+
+Now we can read the spot coordinates and convert them to fit the "tissue_hires_image.png" using the "tissue_hires_scalef" scaling factor.
+
+<br>
+```{r load_spots}
+
+# Read spot coordinates
+positions <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/spaceranger/V13/outs/spatial/tissue_positions_list.csv"
+spots <- setNames(read.table(positions, header = F, sep = ","),
+                  c("barcode", "selection", "y", "x", "pixel_y", "pixel_x"))
+
+# Read json file containing scaling factors
+scale <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/spaceranger/V13/outs/spatial/scalefactors_json.json"
+scaleVisium <- jsonlite::read_json(scale)
+
+# Rescale pixel coordinates
+spots[, c("pixel_x", "pixel_y")] <- spots[, c("pixel_x", "pixel_y")]*scaleVisium$tissue_hires_scalef
+
+# Subset spots under tissue
+spots <- subset(spots, selection == 1)
+
+d <- as.matrix(dist(spots[, c("pixel_x", "pixel_y")]))
+diag(d) <- Inf
+min.spot.distance <- min(apply(d, 2, min))
+
+# Get pixels per micron from known image size and number of pixels
+image.size.micron <- 8705 
+image.size.pixel <- 2000
+pixels.per.um <- image.size.pixel/image.size.micron
+
+# Spot radius = 55um/2
+spot.radius <- pixels.per.um*27.5
+cat("spot radius: ", spot.radius)
+```
+<br>
+
+# Check that spots are aligned with IF
+
+# neurons
+
+<br>
+```{r plot_results, fig.height=12, fig.width=12, out.width="100%"}
+# calculate resize factor by dividing original image dimensions with dim from "tissue_hires_image" in spatial folder
+resize <- 4464/2000
+
+# divide image dimensions by this factor
+fts.moment.neurons[, 1:2] <- fts.moment.neurons[, 1:2]/resize
+
+# overlay visium spots with fluorescent spots 
+plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
+points(fts.moment.neurons[, 1], 2000 - fts.moment.neurons[, 2], col = "red", pch = 19)
+```
+
+Calculate distances between nuclei and Visium spots
+
+<br>
+```{r distance}
+
+set1 = spots[, c("pixel_x", "pixel_y")]
+set2 = fts.moment.neurons[, 1:2]
+mindists <- apply(set1, 1, function(x) {
+  min(sqrt(colSums((t(set2) - x)^2)))
+})
+
+
+# spot radius in microns
+sp.rad <- 27.5
+
+# cell radius in microns
+cell.rad <- 25
+
+# Set threshold
+thr <- pixels.per.um*sp.rad + pixels.per.um*cell.rad
+
+# plot
+hist(mindists, breaks = 100)
+abline(v = thr, lty = "longdash", col = "red")
+```
+
+
+<br>
+
+Now we can just subset the spots data.frame to include spots with a neighbor that is at least "thr" pixels away from its closesst nuclei.
+
+<br>
+```{r threshold, fig.width=7, fig.height=18, out.width="100%"}
+
+spots$mindist <- mindists
+spots$egfp_positive_nucleus_celltype <- ifelse(spots$mindist < thr, "neuron", "unknown")
+nuclei_data <- setNames(data.frame(fts.moment.neurons[, 1:2]), nm = c("nuclei_x", "nuclei_y"))
+
+length(which(spots$egfp_positive_nucleus_celltype == "neuron"))
+
+p1 <- ggplot() +
+  geom_point(data = spots, aes(pixel_x, 2000 - pixel_y, color = egfp_positive_nucleus_celltype), size = 1.2, alpha = 0.6) +
+  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Labeled spots + nuclei positions")
+
+p2 <- ggplot() +
+  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "neuron"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Only selected spots")
+  
+p3 <- ggplot() +
+  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "neuron"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
+  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Only selected spots + nuclei positions")
+
+cowplot::plot_grid(p1, p2, p3, ncol = 1)
+```
+
+
+# oligos
+
+<br>
+```{r plot_results, fig.height=12, fig.width=12, out.width="100%"}
+# calculate resize factor by dividing original image dimensions with dim from "tissue_hires_image" in spatials folder
+resize <- 4464/2000
+
+fts.moment.oligodenrocytes[, 1:2] <- fts.moment.oligodenrocytes[, 1:2]/resize
+
+# plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
+# points(164 + fts.moment.neurons[, 1], 2000 - fts.moment.neurons[, 2] - 164, col = "red", pch = 19)
+
+plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
+points(fts.moment.oligodenrocytes[, 1], 2000 - fts.moment.oligodenrocytes[, 2], col = "red", pch = 19)
+```
+
+Calculate distances between nuclei and Visium spots
+
+<br>
+```{r distance}
+
+set1 = spots[, c("pixel_x", "pixel_y")]
+set2 = fts.moment.oligodenrocytes[, 1:2]
+mindists <- apply(set1, 1, function(x) {
+  min(sqrt(colSums((t(set2) - x)^2)))
+})
+
+
+# spot radius in microns
+sp.rad <- 27.5
+
+# cell radius in microns
+cell.rad <- 25
+
+# Set threshold
+thr <- pixels.per.um*sp.rad + pixels.per.um*cell.rad
+
+# plot
+hist(mindists, breaks = 100)
+abline(v = thr, lty = "longdash", col = "red")
+```
+
+
+<br>
+
+Now we can just subset the spots data.frame to include spots with a neighbor that is at least "thr" pixels away from its closesst nuclei.
+
+<br>
+```{r threshold, fig.width=7, fig.height=18, out.width="100%"}
+
+spots$mindist <- mindists
+spots$egfp_positive_nucleus_celltype <- ifelse(spots$mindist < thr, "oligo", as.character(spots$egfp_positive_nucleus_celltype))
+nuclei_data <- setNames(data.frame(fts.moment.oligodenrocytes[, 1:2]), nm = c("nuclei_x", "nuclei_y"))
+
+p1 <- ggplot() +
+  geom_point(data = spots, aes(pixel_x, 2000 - pixel_y, color = egfp_positive_nucleus_celltype), size = 1.2, alpha = 0.6) +
+  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Labeled spots + nuclei positions")
+
+p2 <- ggplot() +
+  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "oligo"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Only selected spots")
+  
+p3 <- ggplot() +
+  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "oligo"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
+  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Only selected spots + nuclei positions")
+
+cowplot::plot_grid(p1, p2, p3, ncol = 1)
+```
+
+
+# unknown
+
+<br>
+```{r plot_results, fig.height=12, fig.width=12, out.width="100%"}
+# calculate resize factor by dividing original image dimensions with dim from "tissue_hires_image" in spatials folder
+resize <- 4464/2000
+
+fts.moment.unknown[, 1:2] <- fts.moment.unknown[, 1:2]/resize
+
+# plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
+# points(164 + fts.moment.neurons[, 1], 2000 - fts.moment.neurons[, 2] - 164, col = "red", pch = 19)
+
+plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
+points(fts.moment.unknown[, 1], 2000 - fts.moment.unknown[, 2], col = "red", pch = 19)
+```
+
+Calculate distances between nuclei and Visium spots
+
+<br>
+```{r distance}
+
+set1 = spots[, c("pixel_x", "pixel_y")]
+set2 = fts.moment.unknown[, 1:2]
+mindists <- apply(set1, 1, function(x) {
+  min(sqrt(colSums((t(set2) - x)^2)))
+})
+
+
+# spot radius in microns
+sp.rad <- 27.5
+
+# cell radius in microns
+cell.rad <- 25
+
+# Set threshold
+thr <- pixels.per.um*sp.rad + pixels.per.um*cell.rad
+
+# plot
+hist(mindists, breaks = 100)
+abline(v = thr, lty = "longdash", col = "red")
+```
+
+
+<br>
+
+Now we can just subset the spots data.frame to include spots with a neighbor that is at least "thr" pixels away from its closesst nuclei.
+
+<br>
+```{r threshold, fig.width=7, fig.height=18, out.width="100%"}
+
+spots$mindist <- mindists
+spots$egfp_positive_nucleus_celltype <- ifelse(spots$mindist < thr, "unknown", as.character(spots$egfp_positive_nucleus_celltype))
+nuclei_data <- setNames(data.frame(fts.moment.unknown[, 1:2]), nm = c("nuclei_x", "nuclei_y"))
+
+p1 <- ggplot() +
+  geom_point(data = spots, aes(pixel_x, 2000 - pixel_y, color = egfp_positive_nucleus_celltype), size = 1.2, alpha = 0.6) +
+  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Labeled spots + nuclei positions")
+
+p2 <- ggplot() +
+  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "unknown"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Only selected spots")
+  
+p3 <- ggplot() +
+  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "unknown"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
+  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Only selected spots + nuclei positions")
+
+cowplot::plot_grid(p1, p2, p3, ncol = 1)
+```
+
+
+# neun/olig2/egfp triple positive
+
+<br>
+```{r plot_results, fig.height=12, fig.width=12, out.width="100%"}
+# calculate resize factor by dividing original image dimensions with dim from "tissue_hires_image" in spatials folder
+resize <- 4464/2000
+
+fts.moment.olig2_neun_egfp[, 1:2] <- fts.moment.olig2_neun_egfp[, 1:2]/resize
+
+# plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
+# points(164 + fts.moment.neurons[, 1], 2000 - fts.moment.neurons[, 2] - 164, col = "red", pch = 19)
+
+plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
+points(fts.moment.olig2_neun_egfp[, 1], 2000 - fts.moment.olig2_neun_egfp[, 2], col = "red", pch = 19)
+```
+
+# Calculate distances between nuclei and Visium spots
+
+<br>
+```{r distance}
+
+set1 = spots[, c("pixel_x", "pixel_y")]
+set2 = fts.moment.olig2_neun_egfp[, 1:2]
+mindists <- apply(set1, 1, function(x) {
+  min(sqrt(colSums((t(set2) - x)^2)))
+})
+
+
+# spot radius in microns
+sp.rad <- 27.5
+
+# cell radius in microns
+cell.rad <- 25
+
+# Set threshold
+thr <- pixels.per.um*sp.rad + pixels.per.um*cell.rad
+
+# plot
+hist(mindists, breaks = 100)
+abline(v = thr, lty = "longdash", col = "red")
+```
+
+
+<br>
+
+Now we can just subset the spots data.frame to include spots with a neighbor that is at least "thr" pixels away from its closesst nuclei.
+
+<br>
+```{r threshold, fig.width=7, fig.height=18, out.width="100%"}
+
+spots$mindist <- mindists
+spots$egfp_positive_nucleus_celltype <- ifelse(spots$mindist < thr, "neun/olig2", as.character(spots$egfp_positive_nucleus_celltype))
+nuclei_data <- setNames(data.frame(fts.moment.olig2_neun_egfp[, 1:2]), nm = c("nuclei_x", "nuclei_y"))
+
+p1 <- ggplot() +
+  geom_point(data = spots, aes(pixel_x, 2000 - pixel_y, color = egfp_positive_nucleus_celltype), size = 1.2, alpha = 0.6) +
+  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Labeled spots + nuclei positions")
+
+p2 <- ggplot() +
+  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "neun/olig2"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Only selected spots")
+  
+p3 <- ggplot() +
+  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "neun/olig2"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
+  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
+  scale_x_continuous(limits = c(0, 2000)) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  ggtitle("Only selected spots + nuclei positions")
+
+cowplot::plot_grid(p1, p2, p3, ncol = 1)
+```
+
+# Determine number of respective celltype in spots
+
+Strange that 135 egfp+ cells are double pos for neun and olig2 allthough there was only one such cell in the "triple pos" plot above and the fact that "Total number of overlapping Neun-Olig2-EGFP:  1"
+
+```{r}
+spots$egfp_positive_nucleus_celltype <- as.factor(spots$egfp_positive_nucleus_celltype)
+levels(spots$egfp_positive_nucleus_celltype)
+
+table(spots$egfp_positive_nucleus_celltype)
+```
+
+# Add data to V13 Seurat object
+```{r}
+work.dir <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/spaceranger/"
+
+load(paste0(work.dir, "v13.Rds"))
+
+# check if spot ID order matches that in spots 
+rownames(v13@meta.data) == spots$barcode #false 
+
+# re-order rows in spots dataframe such that order matches that in v13 data
+target <- c(as.vector(rownames(v13@meta.data)))
+spots <- spots[match(target, spots$barcode),]
+
+# check if spot ID order matches that in spots 
+rownames(v13@meta.data) == spots$barcode # true
+
+# add as metadata to Seurat
+v13$celltype <- spots$egfp_positive_nucleus_celltype
+
+# save seurat obj
+work.dir <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/results/cell_segmentation/V13/"
+save(v13, file = paste0(work.dir, "v13.Rds"))
+```
+
+# Visualize clones and celltypes
+```{r}
+SpatialDimPlot(v13, group.by = "celltype")
+SpatialDimPlot(v13, group.by = "cloneID")
+```
+
+
+
