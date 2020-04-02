@@ -425,12 +425,14 @@ Now we can read the spot coordinates and convert them to fit the "tissue_hires_i
 ```{r load_spots}
 
 # Read spot coordinates
-positions <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/spaceranger/V13/outs/spatial/tissue_positions_list.csv"
+#positions <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/spaceranger/V13/outs/spatial/tissue_positions_list.csv"
+positions <- "~/Michael_Ratz/cell_segmentation/data/spaceranger/V13/spatial/tissue_positions_list.csv"
 spots <- setNames(read.table(positions, header = F, sep = ","),
                   c("barcode", "selection", "y", "x", "pixel_y", "pixel_x"))
 
 # Read json file containing scaling factors
-scale <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/spaceranger/V13/outs/spatial/scalefactors_json.json"
+#scale <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/spaceranger/V13/outs/spatial/scalefactors_json.json"
+scale <- "~/Michael_Ratz/cell_segmentation/data/spaceranger/V13/spatial/scalefactors_json.json"
 scaleVisium <- jsonlite::read_json(scale)
 
 # Rescale pixel coordinates
@@ -781,26 +783,27 @@ table(spots$egfp_positive_nucleus_celltype)
 
 # Add data to V13 Seurat object
 ```{r}
-work.dir <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/data/spaceranger/"
+work.dir <- "~/Michael_Ratz/cell_segmentation/data/seurat/V13/"
 
 load(paste0(work.dir, "v13.Rds"))
 
 # check if spot ID order matches that in spots 
-rownames(v13@meta.data) == spots$barcode #false 
+#rownames(v13@meta.data) == spots$barcode #false 
 
 # re-order rows in spots dataframe such that order matches that in v13 data
-target <- c(as.vector(rownames(v13@meta.data)))
-spots <- spots[match(target, spots$barcode),]
+#target <- c(as.vector(rownames(v13@meta.data)))
+#spots <- spots[match(target, spots$barcode),]
 
 # check if spot ID order matches that in spots 
-rownames(v13@meta.data) == spots$barcode # true
+#rownames(v13@meta.data) == spots$barcode # true
 
 # add as metadata to Seurat
-v13$celltype <- spots$egfp_positive_nucleus_celltype
+rownames(spots) <- spots$barcode
+v13$celltype <- spots[rownames(v13@meta.data), ]$egfp_positive_nucleus_celltype
 
 # save seurat obj
-work.dir <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/results/cell_segmentation/V13/"
-save(v13, file = paste0(work.dir, "v13.Rds"))
+#work.dir <- "/Users/micrat/OneDrive/Mac/Desktop/1_Work_KI/Projects/1_LV-tracing/V13-V16/results/cell_segmentation/V13/"
+#save(v13, file = paste0(work.dir, "v13.Rds"))
 ```
 
 # Visualize clones and celltypes
