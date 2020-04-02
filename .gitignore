@@ -1,1 +1,3 @@
-images/*
+images/
+.RData
+.DS_Store
