@@ -229,7 +229,7 @@ text(x = 10, y = 20, label = "Neun", adj = c(0, 1), col = "orange", cex = 1.5)
 ```
 
 # Display combined stainings
-```{r combined_stains}
+```{r combined_stains, fig.height=6, fig.width=6}
 im <- rgbImage(red = segmented[[1]], green = segmented[[2]], blue = segmented[[3]])
 display(im, method = "raster")
 text(x = 10, y = 20, label = "combined stainings", adj = c(0, 1), col = "orange", cex = 1.5)
@@ -245,7 +245,7 @@ controls to estimate crosstalk between olig2 and neun channels and the subset of
 olig2 + neun = pixels with positive signal for both NeuN and Olig2
 olig2 + neun + egfp = pixels with positive signal for both NeuN and Olig2 and egfp
 
-```{r extract_overlapping_cells}
+```{r extract_overlapping_cells, fig.width=6, fig.height=6}
 # olig2 and egfp
 oligodendrocyte <- EBImage::channel(im, "red") > 0 & EBImage::channel(im, "green") > 0
 
@@ -284,7 +284,7 @@ text(x = 10, y = 20, label = "overlapping Neun and Olig2 and EGFP", adj = c(0,1)
 
 # Relabel the new shapes to get an estimate on the number cells of the three categories.
 
-```{r }
+```{r histograms, fig.width=12, fig.height=4}
 par(mfrow = c(1, 4))
 fts.shape.neurons <- computeFeatures.shape(bwlabel(neuron))
 cat("Total number estimated of Egfp+ neurons: ", nrow(fts.shape.neurons), "\n")
@@ -809,7 +809,8 @@ v13$celltype <- spots[rownames(v13@meta.data), ]$egfp_positive_nucleus_celltype
 # Visualize clones and celltypes
 ```{r}
 SpatialDimPlot(v13, group.by = "celltype")
-SpatialDimPlot(v13, group.by = "cloneID")
+v13$cloneID_v2 <- ifelse(v13$cloneID == "120", v13$cloneID, NA)
+SpatialDimPlot(v13, group.by = "cloneID_v2")
 ```
 
 
