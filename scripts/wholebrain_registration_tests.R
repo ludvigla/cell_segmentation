@@ -5,15 +5,16 @@ library(ggplot2)
 library(raster)
 library(EBImage)
 
-filename <- "/Users/ludviglarsson/Michael_Ratz/cell_segmentation/data/test/neun.tif"
+filename <- "/Users/ludviglarsson/Michael_Ratz/cell_segmentation/data/test/he_wholebrain_modified.tif"
 
 im <- readImage(filename)
+im <- (1 - im) ^2
 im <- normalize(im)
-im[im < 0.11] <- 0
-im[im > 0.6] <- 0.6
-im <- EBImage::transpose(x = im) %>% EBImage::rotate(angle = 90)
+#im[im < 0.11] <- 0
+#im[im > 0.6] <- 0.6
+im <- EBImage::transpose(x = im) #%>% EBImage::rotate(angle = 90)
 display(im, method = "raster")
-tiff::writeTIFF(im, "/Users/ludviglarsson/Michael_Ratz/cell_segmentation/data/test/Neun.tiff", bits.per.sample = 16)
+tiff::writeTIFF(im, "/Users/ludviglarsson/Michael_Ratz/cell_segmentation/data/test/he_wholebrain_modified_transposed.tif", bits.per.sample = 16)
 
 
 MaskImage <- function (
@@ -105,11 +106,12 @@ display(im.test, method = "raster")
 tiff::writeTIFF(im.test, "/Users/ludviglarsson/Michael_Ratz/cell_segmentation/data/test/Neun_clean.tiff", bits.per.sample = 16)
 
 grDevices::quartz()
-seg <- segment("/Users/ludviglarsson/Michael_Ratz/cell_segmentation/data/test/Neun_clean.tiff", filter = NULL, downsample = 0.25)
+seg <- segment("/Users/ludviglarsson/Michael_Ratz/cell_segmentation/data/test/he_wholebrain_modified_transposed.tif", filter = NULL, downsample = 0.25)
 seg$filter$resize <- 0.08
+seg$filter$resize <- 0.16
 
 # registration
-regi <- registration(input = "~/Michael_Ratz/cell_segmentation/data/test/Neun_clean.tiff",
+regi <- registration(input = "~/Michael_Ratz/cell_segmentation/data/test/he_wholebrain_modified_transposed.tif",
                      coordinate = -1.5, filter = seg$filter, plane = "coronal", right.hemisphere = T)
 
 # add corr.points
