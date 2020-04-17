@@ -7,7 +7,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
+```{r load_libs}
 library(EBImage)
 library(ggplot2)
 library(cowplot)
@@ -16,7 +16,7 @@ library(zeallot)
 ```
 
 # Define functions
-```{r}
+```{r define_functions}
 # Define filter function for later
 filter_cells <- function(im, brush.size = 9, verbose = FALSE) {
   if (verbose) cat("Applying 2D convolution filter to image ... \n")
@@ -188,20 +188,29 @@ OverlapImages <- function(
 Apply previoulsy established segmentation workflow to uncropped and raw TIF images for each channel
 
 ```{r segmentation_run}
-img.files <- c("~/Michael_Ratz/cell_segmentation/data/olig2.tif", 
-               "~/Michael_Ratz/cell_segmentation/data/egfp.tif", 
-               "~/Michael_Ratz/cell_segmentation/data/neun.tif")
 
-segmented <- list()
-for (i in 1:length(img.files)) {
-  print(img.files[i])
-  segmented[[i]] <- SegmentCells(
-    impath = img.files[i], 
-    crop.window = NULL, # x axis crop between pos1 and pos2, y axis crop between pos3 and pos4
-    nsd = 2, 
-    feature.threshold = 4, 
-    do.fast = TRUE, 
-    verbose = TRUE)
+img.files.list <- list(
+  v13 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V13", recursive = T, full.names = T),
+  v14 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V14", recursive = T, full.names = T),
+  v15 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V15", recursive = T, full.names = T),
+  v16 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V16", recursive = T, full.names = T)
+)
+
+segmented.list <- list()
+for (s in names(img.files.list)) {
+  img.files <- img.files.list[[s]]
+  segmented <- list()
+  for (i in 1:length(img.files)) {
+    print(img.files[i])
+    segmented[[i]] <- SegmentCells(
+      impath = img.files[i], 
+      crop.window = NULL, # x axis crop between pos1 and pos2, y axis crop between pos3 and pos4
+      nsd = 2, 
+      feature.threshold = 4, 
+      do.fast = TRUE, 
+      verbose = TRUE)
+  }
+  segmented.list[[s]] <- segmented
 }
 
 names(segmented) <- c("Olig2", "Egfp", "Neun")
@@ -336,11 +345,6 @@ Now we can apply this overlap detection tool to pairs of segmented images. Remem
 
 The unknown Egfp cells are here defined as the Egfp cells with neither Olig2 or Neun overlap. This still means that there could be some overlap, just smaller than 50%.
 
-*error* when running 
-# overlap between olig2_neun and egfp
-c(olig2_neun_egfp, Olig2_Neun_Egfp_inds) %<-% OverlapImages(EBImage::channel(im, "red"), EBImage::channel(im, "blue"), EBImage::channel(im, "green"), return.indices = T)
-
-longer object length is not a multiple of shorter object lengthError in `$<-.data.frame`(`*tmp*`, "keep", value = new("Image", .Data = c(TRUE,  : replacement has 4464 rows, data has 2941
 
 ```{r overlap_computation, fig.height=6, fig.width=6}
 
@@ -362,15 +366,15 @@ c(olig2_neun_egfp, Olig2_Neun_Egfp_inds) %<-% OverlapImages(olig2_neun, segmente
 unknown <- rmObjects(segmented[["Egfp"]], index = as.numeric(c(Olig2_inds$indb, Neun_inds$indb)))
 
 # par(mfrow = c(4, 1))
-display(dilate(oligodendrocyte), method = "raster")
+EBImage::display(EBImage::dilate(oligodendrocyte), method = "raster")
 text(x = 10, y = 20, label = "oligodendrocyte + EGFP", adj = c(0,1), col = "orange", cex = 1.5)
-display(dilate(neuron), method = "raster")
+EBImage::display(EBImage::dilate(neuron), method = "raster")
 text(x = 10, y = 20, label = "neurons + EGFP", adj = c(0,1), col = "orange", cex = 1.5)
-display(dilate(unknown), method = "raster")
+EBImage::display(EBImage::dilate(unknown), method = "raster")
 text(x = 10, y = 20, label = "unknown + EGFP", adj = c(0,1), col = "orange", cex = 1.5)
-display(dilate(olig2_neun), method = "raster")
+EBImage::display(EBImage::dilate(olig2_neun), method = "raster")
 text(x = 10, y = 20, label = "overlapping Neun and Olig2", adj = c(0,1), col = "orange", cex = 1.5)
-display(dilate(olig2_neun_egfp), method = "raster")
+EBImage::display(EBImage::dilate(olig2_neun_egfp), method = "raster")
 text(x = 10, y = 20, label = "overlapping Neun and Olig2 and EGFP", adj = c(0,1), col = "orange", cex = 1.5)
 ```
 
@@ -404,8 +408,7 @@ We can now extract the feature coordinates and labels to have a data.frame forma
 ```{r pot_celltypes, fig.width=14, fig.height=12}
 df <- rbind(setNames(cbind(data.frame(fts.moment.neurons[, 1:2]), "neuron"), nm = c("x", "y", "celltype")),
             setNames(cbind(data.frame(fts.moment.oligodenrocytes[, 1:2]), "oligodendrocyte"), nm = c("x", "y", "celltype")),
-            setNames(cbind(data.frame(fts.moment.unknown[, 1:2]), "unknown"), nm = c("x", "y", "celltype")),
-            setNames(cbind(data.frame(fts.moment.olig2_neun[, 1:2]), "neuron/oligo"), nm = c("x", "y", "celltype")))
+            setNames(cbind(data.frame(fts.moment.unknown[, 1:2]), "unknown"), nm = c("x", "y", "celltype")))
 
 ggplot(df, aes(x, 3000 - y, color = celltype)) + 
   geom_point(size = 0.3) +
@@ -466,22 +469,67 @@ cat("spot radius: ", spot.radius)
 resize <- 4464/2000
 
 # divide image dimensions by this factor
-fts.moment.neurons[, 1:2] <- fts.moment.neurons[, 1:2]/resize
+gg <- fts.moment.neurons[, 1:2]/resize
 
 # overlay visium spots with fluorescent spots 
 plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
-points(fts.moment.neurons[, 1], 2000 - fts.moment.neurons[, 2], col = "red", pch = 19)
+points(gg[, 1], 2000 - gg[, 2], col = "red", pch = 19)
 ```
+
+# Alignment of images
+
+```{r alignment}
+
+library(STutility)
+
+# Get HE images
+he.images <- list.files(pattern = "hires_image.png", path = "data/spaceranger", recursive = TRUE, full.names = TRUE)[c(1, 2, 3, 8)]
+json <- list.files(pattern = "scalefactors", path = "data/spaceranger", recursive = TRUE, full.names = TRUE)[c(1, 2, 3, 8)]
+
+# Get spot meta.data
+spotfiles <- list.files(pattern = "tissue_positions", path = "data/spaceranger", recursive = TRUE, full.names = TRUE)[c(1, 2, 3, 8)]
+meta.data <- do.call(rbind, lapply(seq_along(spotfiles), function(i) {
+  alignment <- read.table(file = spotfiles[i], header = FALSE, sep = ",", stringsAsFactors = FALSE)
+  alignment <- setNames(alignment, nm = c("barcode", "selection", "y", "x", "pixel_y", "pixel_x"))
+  sf <- jsonlite::read_json(path = json[i])$tissue_hires_scalef
+  alignment$pixel_x <- alignment$pixel_x*sf
+  alignment$pixel_y <- alignment$pixel_y*sf
+  alignment <- subset(alignment, selection == 1)
+  alignment <- data.frame(x = alignment$x, y = alignment$y, adj_x = alignment$x, adj_y = alignment$y,
+                          pixel_x = alignment$pixel_x, pixel_y = alignment$pixel_y, barcode = alignment$barcode,
+                          sample = paste0(i), stringsAsFactors = FALSE)
+  rownames(alignment) <- paste0(alignment$x, "x", alignment$y, "_", i)
+  return(alignment)
+}))
+
+st.object <- CreateStaffliObject(imgs = he.images, meta.data = meta.data, xdim = 400, platforms = rep("Visium", 4))
+st.object <- LoadImages(st.object, time.resolve = FALSE, verbose = TRUE)
+st.object <- MaskImages(st.object, verbose = TRUE)
+st.object <- AlignImages(st.object, verbose = TRUE)
+
+par(mfrow = c(2, 2))
+for (i in 1:4) {
+  plot(as.cimg(st.object@rasterlists$processed.masks[[1]]))
+  points(subset(st.object@meta.data[, c("pixel_x", "pixel_y")]/(2000/400)))
+}
+
+```
+
+## Distance
 
 Calculate distances between nuclei and Visium spots
 
 <br>
 ```{r distance}
 
-set1 = spots[, c("pixel_x", "pixel_y")]
-set2 = fts.moment.neurons[, 1:2]
+set1 = st.object@meta.data[, c("warped_x", "warped_y", "sample")]
+set1$z <- pixels.per.um*12*as.numeric(set1$sample)
+set1 <- set1[, c("warped_x", "warped_y", "z")]
+#set2 = fts.moment.neurons[, 1:2]
+set2 = df[, 1:2]/resize
+set2$z <- pixels.per.um*12
 mindists <- apply(set1, 1, function(x) {
-  min(sqrt(colSums((t(set2) - x)^2)))
+  sqrt(colSums((t(set2) - x)^2))
 })
 
 
@@ -497,277 +545,33 @@ thr <- pixels.per.um*sp.rad + pixels.per.um*cell.rad
 # plot
 hist(mindists, breaks = 100)
 abline(v = thr, lty = "longdash", col = "red")
+
+# Set all distances < thr to 0
+#mindists[mindists > thr] <- NA
+ctype <- as.character(df$celltype)
+spts <- as.character(st.object@meta.data$barcode)
+res <- do.call(rbind, lapply(1:ncol(mindists), function(i) {
+  x <- mindists[, i]
+  inds = which(x <= thr)
+  if (length(inds) > 0) {
+    return(data.frame(celltype = ctype[inds], pixel_x_nuclei = df$x[inds], pixel_y_nuclei = df$y[inds], barcode = spts[i], stringsAsFactors = F))
+  } else {
+    return(NULL)
+  }
+}))
+
+spots_subset <- merge(res, st.object@meta.data, by = "barcode") 
+spots_subset$pixel_x <- spots_subset$pixel_x*resize
+spots_subset$pixel_y <- spots_subset$pixel_y*resize
+ggplot() +
+  geom_segment(data = spots_subset, aes(x = pixel_x, xend = pixel_x_nuclei, y = pixel_y, yend = pixel_y_nuclei, color = celltype))
+
 ```
 
+```{r 3D}
 
-<br>
 
-Now we can just subset the spots data.frame to include spots with a neighbor that is at least "thr" pixels away from its closesst nuclei.
 
-<br>
-```{r threshold, fig.width=7, fig.height=18, out.width="100%"}
-
-spots$mindist <- mindists
-spots$egfp_positive_nucleus_celltype <- ifelse(spots$mindist < thr, "neuron", "unknown")
-nuclei_data <- setNames(data.frame(fts.moment.neurons[, 1:2]), nm = c("nuclei_x", "nuclei_y"))
-
-length(which(spots$egfp_positive_nucleus_celltype == "neuron"))
-
-p1 <- ggplot() +
-  geom_point(data = spots, aes(pixel_x, 2000 - pixel_y, color = egfp_positive_nucleus_celltype), size = 1.2, alpha = 0.6) +
-  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Labeled spots + nuclei positions")
-
-p2 <- ggplot() +
-  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "neuron"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Only selected spots")
-  
-p3 <- ggplot() +
-  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "neuron"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
-  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Only selected spots + nuclei positions")
-
-cowplot::plot_grid(p1, p2, p3, ncol = 1)
-```
-
-
-# oligos
-
-<br>
-```{r plot_results, fig.height=12, fig.width=12, out.width="100%"}
-# calculate resize factor by dividing original image dimensions with dim from "tissue_hires_image" in spatials folder
-resize <- 4464/2000
-
-fts.moment.oligodenrocytes[, 1:2] <- fts.moment.oligodenrocytes[, 1:2]/resize
-
-# plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
-# points(164 + fts.moment.neurons[, 1], 2000 - fts.moment.neurons[, 2] - 164, col = "red", pch = 19)
-
-plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
-points(fts.moment.oligodenrocytes[, 1], 2000 - fts.moment.oligodenrocytes[, 2], col = "red", pch = 19)
-```
-
-Calculate distances between nuclei and Visium spots
-
-<br>
-```{r distance}
-
-set1 = spots[, c("pixel_x", "pixel_y")]
-set2 = fts.moment.oligodenrocytes[, 1:2]
-mindists <- apply(set1, 1, function(x) {
-  min(sqrt(colSums((t(set2) - x)^2)))
-})
-
-
-# spot radius in microns
-sp.rad <- 27.5
-
-# cell radius in microns
-cell.rad <- 25
-
-# Set threshold
-thr <- pixels.per.um*sp.rad + pixels.per.um*cell.rad
-
-# plot
-hist(mindists, breaks = 100)
-abline(v = thr, lty = "longdash", col = "red")
-```
-
-
-<br>
-
-Now we can just subset the spots data.frame to include spots with a neighbor that is at least "thr" pixels away from its closesst nuclei.
-
-<br>
-```{r threshold, fig.width=7, fig.height=18, out.width="100%"}
-
-spots$mindist <- mindists
-spots$egfp_positive_nucleus_celltype <- ifelse(spots$mindist < thr, "oligo", as.character(spots$egfp_positive_nucleus_celltype))
-nuclei_data <- setNames(data.frame(fts.moment.oligodenrocytes[, 1:2]), nm = c("nuclei_x", "nuclei_y"))
-
-p1 <- ggplot() +
-  geom_point(data = spots, aes(pixel_x, 2000 - pixel_y, color = egfp_positive_nucleus_celltype), size = 1.2, alpha = 0.6) +
-  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Labeled spots + nuclei positions")
-
-p2 <- ggplot() +
-  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "oligo"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Only selected spots")
-  
-p3 <- ggplot() +
-  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "oligo"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
-  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Only selected spots + nuclei positions")
-
-cowplot::plot_grid(p1, p2, p3, ncol = 1)
-```
-
-
-# unknown
-
-<br>
-```{r plot_results, fig.height=12, fig.width=12, out.width="100%"}
-# calculate resize factor by dividing original image dimensions with dim from "tissue_hires_image" in spatials folder
-resize <- 4464/2000
-
-fts.moment.unknown[, 1:2] <- fts.moment.unknown[, 1:2]/resize
-
-# plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
-# points(164 + fts.moment.neurons[, 1], 2000 - fts.moment.neurons[, 2] - 164, col = "red", pch = 19)
-
-plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
-points(fts.moment.unknown[, 1], 2000 - fts.moment.unknown[, 2], col = "red", pch = 19)
-```
-
-Calculate distances between nuclei and Visium spots
-
-<br>
-```{r distance}
-
-set1 = spots[, c("pixel_x", "pixel_y")]
-set2 = fts.moment.unknown[, 1:2]
-mindists <- apply(set1, 1, function(x) {
-  min(sqrt(colSums((t(set2) - x)^2)))
-})
-
-
-# spot radius in microns
-sp.rad <- 27.5
-
-# cell radius in microns
-cell.rad <- 25
-
-# Set threshold
-thr <- pixels.per.um*sp.rad + pixels.per.um*cell.rad
-
-# plot
-hist(mindists, breaks = 100)
-abline(v = thr, lty = "longdash", col = "red")
-```
-
-
-<br>
-
-Now we can just subset the spots data.frame to include spots with a neighbor that is at least "thr" pixels away from its closesst nuclei.
-
-<br>
-```{r threshold, fig.width=7, fig.height=18, out.width="100%"}
-
-spots$mindist <- mindists
-spots$egfp_positive_nucleus_celltype <- ifelse(spots$mindist < thr, "unknown", as.character(spots$egfp_positive_nucleus_celltype))
-nuclei_data <- setNames(data.frame(fts.moment.unknown[, 1:2]), nm = c("nuclei_x", "nuclei_y"))
-
-p1 <- ggplot() +
-  geom_point(data = spots, aes(pixel_x, 2000 - pixel_y, color = egfp_positive_nucleus_celltype), size = 1.2, alpha = 0.6) +
-  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Labeled spots + nuclei positions")
-
-p2 <- ggplot() +
-  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "unknown"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Only selected spots")
-  
-p3 <- ggplot() +
-  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "unknown"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
-  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Only selected spots + nuclei positions")
-
-cowplot::plot_grid(p1, p2, p3, ncol = 1)
-```
-
-
-# neun/olig2/egfp triple positive
-
-<br>
-```{r plot_results, fig.height=12, fig.width=12, out.width="100%"}
-# calculate resize factor by dividing original image dimensions with dim from "tissue_hires_image" in spatials folder
-resize <- 4464/2000
-
-fts.moment.olig2_neun_egfp[, 1:2] <- fts.moment.olig2_neun_egfp[, 1:2]/resize
-
-# plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
-# points(164 + fts.moment.neurons[, 1], 2000 - fts.moment.neurons[, 2] - 164, col = "red", pch = 19)
-
-plot(x = spots$pixel_x, y = 2000 - spots$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000))
-points(fts.moment.olig2_neun_egfp[, 1], 2000 - fts.moment.olig2_neun_egfp[, 2], col = "red", pch = 19)
-```
-
-# Calculate distances between nuclei and Visium spots
-
-<br>
-```{r distance}
-
-set1 = spots[, c("pixel_x", "pixel_y")]
-set2 = fts.moment.olig2_neun_egfp[, 1:2]
-mindists <- apply(set1, 1, function(x) {
-  min(sqrt(colSums((t(set2) - x)^2)))
-})
-
-
-# spot radius in microns
-sp.rad <- 27.5
-
-# cell radius in microns
-cell.rad <- 25
-
-# Set threshold
-thr <- pixels.per.um*sp.rad + pixels.per.um*cell.rad
-
-# plot
-hist(mindists, breaks = 100)
-abline(v = thr, lty = "longdash", col = "red")
-```
-
-
-<br>
-
-Now we can just subset the spots data.frame to include spots with a neighbor that is at least "thr" pixels away from its closesst nuclei.
-
-<br>
-```{r threshold, fig.width=7, fig.height=18, out.width="100%"}
-
-spots$mindist <- mindists
-spots$egfp_positive_nucleus_celltype <- ifelse(spots$mindist < thr, "neun/olig2", as.character(spots$egfp_positive_nucleus_celltype))
-nuclei_data <- setNames(data.frame(fts.moment.olig2_neun_egfp[, 1:2]), nm = c("nuclei_x", "nuclei_y"))
-
-p1 <- ggplot() +
-  geom_point(data = spots, aes(pixel_x, 2000 - pixel_y, color = egfp_positive_nucleus_celltype), size = 1.2, alpha = 0.6) +
-  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Labeled spots + nuclei positions")
-
-p2 <- ggplot() +
-  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "neun/olig2"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Only selected spots")
-  
-p3 <- ggplot() +
-  geom_point(data = subset(spots, egfp_positive_nucleus_celltype == "neun/olig2"), aes(pixel_x, 2000 - pixel_y), color = "#377EB8", size = 1.2, alpha = 0.6) +
-  geom_point(data = nuclei_data, aes(nuclei_x, 2000 - nuclei_y), size = 0.5) +
-  scale_x_continuous(limits = c(0, 2000)) +
-  scale_y_continuous(limits = c(0, 2000)) +
-  ggtitle("Only selected spots + nuclei positions")
-
-cowplot::plot_grid(p1, p2, p3, ncol = 1)
 ```
 
 # Determine number of respective celltype in spots
