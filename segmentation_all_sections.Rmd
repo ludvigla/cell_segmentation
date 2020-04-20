@@ -13,9 +13,13 @@ library(ggplot2)
 library(cowplot)
 library(magrittr)
 library(zeallot)
+library(dplyr)
+library(plotly)
 ```
 
 # Define functions
+***
+
 ```{r define_functions}
 # Define filter function for later
 filter_cells <- function(im, brush.size = 9, verbose = FALSE) {
@@ -192,6 +196,7 @@ Apply previoulsy established segmentation workflow to uncropped and raw TIF imag
 
 ```{r segmentation_run}
 
+# list input files
 img.files.list <- list(
   v13 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V13", recursive = T, full.names = T),
   v14 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V14", recursive = T, full.names = T),
@@ -199,12 +204,13 @@ img.files.list <- list(
   v16 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V16", recursive = T, full.names = T)
 )
 
-# Define feature threshold ranges
+# define feature threshold ranges
 feature.thresholds <- list(Neun = c(5, 40), Olig2 = c(8, 40), Egfp = c(5, 40))
 img.files.list <- lapply(img.files.list, function(x) {
   setNames(x, nm = c("Egfp", "Neun", "Olig2"))
 })
 
+# read images and run segmentation for each dataset
 segmented.list <- list()
 for (s in names(img.files.list)) {
   img.files <- img.files.list[[s]]
@@ -225,11 +231,11 @@ for (s in names(img.files.list)) {
 
 ```
 
-# Find overlapping signals
-
-The next step will be to find out what signals are overlapping, but first we can just visualize the results from the three segmented images. Since we have three targets, we can encode them directly in RGB channels. You can already see some overlapping cells. We can ignore the cells along the edges for now, these will not be present when we run the whole image at once.
+## Count detected nuclei
+***
 
 ```{r count_features}
+
 for (s in names(segmented.list)) {
   segmented <- segmented.list[[s]]
   cat("Total number of oligodendrocytes in ", s, ": ", length(table(segmented[["Olig2"]])), "\n")
@@ -237,21 +243,26 @@ for (s in names(segmented.list)) {
   cat("Total number of neurons in ", s, ": ", length(table(segmented[["Neun"]])), "\n\n")
 }
 
-
 ```
 
-# Display combined stainings
+## Display combined stainings
+***
+
+Something looks really odd in sample 2, like the brain section has been torn apart a little. There's almost no signal for Olig2 and Neun, but wuite a lot for Egfp.
+
 ```{r combined_stains, fig.height=12, fig.width=12}
 
-for (segmented in segmented.list) {
+for (i in seq_along(segmented.list)) {
+  segmented <- segmented.list[[i]]
   im <- rgbImage(red = segmented[["Olig2"]], green = segmented[["Egfp"]], blue = segmented[["Neun"]])
   display(im, method = "raster")
-  text(x = 10, y = 20, label = "combined stainings", adj = c(0, 1), col = "orange", cex = 1.5)
+  text(x = 10, y = 20, label = paste0("section ", i, "\nred : Olig2, green : Egfp, blue : Neun"), adj = c(0, 1), col = "orange", cex = 1.5)
 }
 
 ```
 
 # estimate intersect of overlapping cells
+***
 
 for cells with multiple overlaps, keep only the top hit
 for each pair of overlapping shapes A and B, estimate the overlap as intersect(A, B)/min(A, B)
@@ -261,6 +272,12 @@ Now we can apply this overlap detection tool to pairs of segmented images. Remem
 
 The unknown Egfp cells are here defined as the Egfp cells with neither Olig2 or Neun overlap. This still means that there could be some overlap, just smaller than 50%.
 
+1. Run overlap function on Olig2 and Neun images to find cells with Olig2+ and Neun+ signal
+2. Remove overlapping cells defined in (1) from Olig2 and Neun images
+3. Run overlap function on Olig2 and Egfp images to find cells with Olig2+ and Egfp+ signal
+4. Run overlap function on Neun and Egfp images to find cells with Neun+ and Egfp+ signal
+5. Run overlap function on Olig2_Neun defined in (1) and Egfp images to find cells with Neun+, Olig2+ and Egfp+ signal
+6. Define unknown cells as all Egfp+ cells which are not in (3) or (4). This should still include cells which are positive for all three signals
 
 ```{r overlap_computation, fig.height=6, fig.width=6}
 
@@ -269,21 +286,21 @@ for (s in names(segmented.list)) {
   segmented <- segmented.list[[s]]
   
   # overlap between olig2 and neun
-  c(olig2_neun, Olig2_Neun_inds) %<-% OverlapImages(segmented[["Olig2"]], segmented[["Neun"]], return.indices = T)
-  Olig2 <- rmObjects(segmented[["Olig2"]], index = Olig2_Neun_inds$inda)
-  Neun <- rmObjects(segmented[["Neun"]], index = Olig2_Neun_inds$indb)
+  c(olig2_neun, Olig2_Neun_inds) %<-% OverlapImages(segmented[["Olig2"]], segmented[["Neun"]], return.indices = T) # 1.
+  Olig2 <- rmObjects(segmented[["Olig2"]], index = Olig2_Neun_inds$inda) # 2.
+  Neun <- rmObjects(segmented[["Neun"]], index = Olig2_Neun_inds$indb) # 2.
   
   # overlap between olig2 and egfp
-  c(oligodendrocytes, Olig2_inds) %<-% OverlapImages(Olig2, segmented[["Egfp"]], return.indices = T)
+  c(oligodendrocytes, Olig2_inds) %<-% OverlapImages(Olig2, segmented[["Egfp"]], return.indices = T) # 3.
   
   #overlap between neun and egfp
-  c(neurons, Neun_inds) %<-% OverlapImages(Neun, segmented[["Egfp"]], return.indices = T)
+  c(neurons, Neun_inds) %<-% OverlapImages(Neun, segmented[["Egfp"]], return.indices = T) # 4.
   
   # overlap between olig2_neun and egfp
-  c(oligodendrocytes_neurons, oligodendrocytes_neurons_inds) %<-% OverlapImages(olig2_neun, segmented[["Egfp"]], return.indices = T)
+  c(oligodendrocytes_neurons, oligodendrocytes_neurons_inds) %<-% OverlapImages(olig2_neun, segmented[["Egfp"]], return.indices = T) # 5.
   
   # egfp only
-  unknown <- rmObjects(segmented[["Egfp"]], index = as.numeric(c(Olig2_inds$indb, Neun_inds$indb)))
+  unknown <- rmObjects(segmented[["Egfp"]], index = as.numeric(c(Olig2_inds$indb, Neun_inds$indb))) # 6.
   
   segmented.egfp.list[[s]] <- list(oligodendrocytes, neurons, oligodendrocytes_neurons, unknown)
   cat("Finished processing dataset ", s, "\n")
@@ -291,6 +308,8 @@ for (s in names(segmented.list)) {
 
 ```
 
+## Count Egfp+ nuclei
+***
 
 ```{r estimate_counts}
 
@@ -314,10 +333,7 @@ for (s in names(segmented.egfp.list)) {
 
 ```
 
-
-Total number of Egfp+ cells after cleaning:  3758
-
-We can now extract the feature coordinates and labels to have a data.frame format that is a bit easier to work with
+We can now extract the feature coordinates and labels to have a data.frame format that is a bit easier to work with. Each data.frame contains the x/y coordinates for a celltype and the sample column defines the sectioning order which we can use to set a z axis value.
 
 ```{r pot_celltypes, fig.width=14, fig.height=12}
 
@@ -340,10 +356,12 @@ for (i in seq_along(segmented.egfp.list)) {
   fts.moment.unknown <- computeFeatures.moment(unknown)
   df.unknown <- rbind(df.unknown, setNames(cbind(data.frame(fts.moment.unknown[, 1:2]), "unknown", sample = i), nm = c("x", "y", "celltype", "sample")))
 }
+
+head(df.neurons)
   
 ```
 
-Now we can read the spot coordinates and convert them to fit the "tissue_hires_image.png" using the "tissue_hires_scalef" scaling factor.
+Now we can read the spot coordinates and convert them to fit the "tissue_hires_image.png" using the "tissue_hires_scalef" scaling factor. We will load this spot coordinates from all four datasets and store them in a list of data.frames called spots. We have to subset the data to contain spots under tissue by keeping spots where the selection column is 1. The spots data.frames also contains the spot barcodes which we can use as a unique ID to keep track of the spots across different sections. However, first we need to make these IDs unique across section by adding some section-specific label.
 
 <br>
 ```{r load_spots}
@@ -369,6 +387,7 @@ spots <- setNames(lapply(seq_along(spots), function(i) {
   scaleVisium <- jsonlite::read_json(scalefactors.files[i])
   x[, c("pixel_x", "pixel_y")] <- x[, c("pixel_x", "pixel_y")]*scaleVisium$tissue_hires_scalef
   x <- subset(x, selection == 1)
+  x$barcode <- paste0(x$barcode, "_", i) # Add section label
   return(x)
 }), nm = c("v13", "v14", "v15", "v16"))
 
@@ -381,30 +400,60 @@ pixels.per.um <- image.size.pixel/image.size.micron
 spot.radius <- pixels.per.um*27.5
 cat("spot radius: ", spot.radius)
 
+head(spots[[1]])
+
 ```
 <br>
 
 # Check that spots are aligned with IF
 
-# neurons
-
 <br>
 ```{r plot_results, fig.height=12, fig.width=12, out.width="100%"}
 
-par(mfrow = c(2, 2), mar=c(0,0,0,0))
+par(mfrow = c(4, 4), mar = c(0.05, 0.05, 0.05, 0.05))
 for (s in names(segmented.egfp.list)) {
   c(oligodendrocytes, neurons, oligodendrocytes_neurons, unknown) %<-% segmented.egfp.list[[s]]
+  fts.moment.oligodendrocytes <- computeFeatures.moment(oligodendrocytes)
   fts.moment.neurons <- computeFeatures.moment(neurons)
+  fts.moment.oligodendrocytes_neurons <- computeFeatures.moment(oligodendrocytes_neurons)
+  fts.moment.unknown <- computeFeatures.moment(unknown)
   resize <- dim(neurons)[2]/2000
-  print(resize)
-  gg <- fts.moment.neurons[, 1:2]/resize
+  
+  # Plot oligodendrocytes
+  gg <- fts.moment.oligodendrocytes[, 1:2]/resize
   plot(x = spots[[s]]$pixel_x, y = 2000 - spots[[s]]$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000), axes=FALSE)
   points(gg[, 1], 2000 - gg[, 2], col = "red", pch = 19, cex=0.5)
+  title(main = paste0("Oligodendrocytes ", s))
+  
+  # Plot neurons
+  gg <- fts.moment.neurons[, 1:2]/resize
+  plot(x = spots[[s]]$pixel_x, y = 2000 - spots[[s]]$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000), axes=FALSE)
+  points(gg[, 1], 2000 - gg[, 2], col = "blue", pch = 19, cex=0.5)
+  title(main = paste0("Neurons ", s))
+  
+  # Plot neurons
+  gg <- fts.moment.oligodendrocytes_neurons[, 1:2]/resize
+  plot(x = spots[[s]]$pixel_x, y = 2000 - spots[[s]]$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000), axes=FALSE)
+  points(gg[, 1], 2000 - gg[, 2], col = "green", pch = 19, cex=0.5)
+  title(main = paste0("Oligodendrocytes + Neurons ", s))
+  
+  # Plot neurons
+  gg <- fts.moment.unknown[, 1:2]/resize
+  plot(x = spots[[s]]$pixel_x, y = 2000 - spots[[s]]$pixel_y, xlim = c(0, 2000), ylim = c(0, 2000), axes=FALSE)
+  points(gg[, 1], 2000 - gg[, 2], col = "yellow", pch = 19, cex=0.5)
+  title(main = paste0("Unknowns ", s))
 }
 
 ```
 
 # Alignment of images
+***
+
+Here's we'll use the STUtility R package to find and apply a rigid alignment function to transform coordinates from a reference image to a target image. We would usually use the HE images for this, but in this case the Neun images worked quite well instead. i just had to normalize the intensity values and export the images as jpegs instead to make it work with the alignment functions.
+
+Once we have the modified Neun images, we also need to load the spot coordinates to create a "Staffli" object. The Staffli object can be used to store image data and spot coordinates and we will use this object to find transformation function.
+
+When creating the Staffli object using the `CreateStaffliObject` function we can set a parameter called xdim which will tdefine the width of the downscaled version of the original image that will be stored in the Staffli object. For example, if we set xdim to 400, the loaded images will be downscaled to a width of 400 pixels.
 
 ```{r alignment}
 
@@ -413,17 +462,18 @@ library(STutility)
 # Get HE images
 he.images <- list.files(pattern = "neun.tif", path = "data", recursive = TRUE, full.names = TRUE)[2:5]
 
+# Normalize intensity values and export as jpeg
 for (he in he.images) {
   img <- readImage(he)
   img <- normalize(img)
   writeImage(x = img, files = paste0(dirname(he), "/neun_mod.jpg"))
 }
 
-
+# List the paths to the modified jpegs
 he.images <- list.files(pattern = "neun_mod.jpg", path = "data", recursive = TRUE, full.names = TRUE)
 json <- list.files(pattern = "scalefactors", path = "data/spaceranger", recursive = TRUE, full.names = TRUE)[4:7]
 
-# Get spot meta.data
+# Create a data.frame with spot coordinates to use as meta.data for the Staffli object
 spotfiles <- list.files(pattern = "tissue_positions", path = "data/spaceranger", recursive = TRUE, full.names = TRUE)[4:7]
 meta.data <- do.call(rbind, lapply(seq_along(spotfiles), function(i) {
   alignment <- read.table(file = spotfiles[i], header = FALSE, sep = ",", stringsAsFactors = FALSE)
@@ -432,6 +482,7 @@ meta.data <- do.call(rbind, lapply(seq_along(spotfiles), function(i) {
   alignment$pixel_x <- alignment$pixel_x*sf
   alignment$pixel_y <- alignment$pixel_y*sf
   alignment <- subset(alignment, selection == 1)
+  alignment$barcode <- paste0(alignment$barcode, "_", i) # Add unique section label
   alignment <- data.frame(x = alignment$x, y = alignment$y, adj_x = alignment$x, adj_y = alignment$y,
                           pixel_x = alignment$pixel_x, pixel_y = alignment$pixel_y, barcode = alignment$barcode,
                           sample = paste0(i), stringsAsFactors = FALSE)
@@ -439,12 +490,41 @@ meta.data <- do.call(rbind, lapply(seq_along(spotfiles), function(i) {
   return(alignment)
 }))
 
+# Create Staffli object
 st.object <- CreateStaffliObject(imgs = he.images, meta.data = meta.data, xdim = 400, platforms = rep("Visium", 4))
+st.object
+
+```
+
+If we apply the plot function to our Staffli object we will simply plot thespot coordinates
+
+```{r plot_Staffli_new, fig.height=12, fig.width=12}
+
+plot(st.object)
+
+```
+
+We can now load the Neun images and visualize the spots on top of them. The images are already quite well aligned, but there are some small offsets that we can correct for. Looking at the shape of the section I think a rigid alignment should suffice.
+
+```{r load_images, fig.width=12, fig.height=12}
+
+# Load images
 st.object <- LoadImages(st.object, time.resolve = FALSE, verbose = TRUE)
+plot(st.object, col = "red")
+
+```
+
+Before we can run the image alignment method, we need to mask the images, meaning that we need to remove the background around the tissue. We have a predefined option using the `MaskImages` function, but because these images are not HE stained the masking will fail. Instead we need to define a custom masking function that is specifically defined for this type of image.
+
+First, we'll define a function to run the [SLIC algorithm](https://jayrambhia.com/blog/superpixels-slic) which can be a pretty neat tool to use in image segmentation and I found it to be particularly useful for masking. What the algorithm does is to clump together neighboring pixels of similary color intensity to create super pixels. These superpixels blur out small details, but can be very good at capturing the structure of larger shapes.
+
+Below is an example of how the SLIC algorithm can be used to clump together pixels into super pixels.
+
+```{r masking}
 
 # Define slic function
 slic <- function (im, nS, compactness = 1) {
-  #if (imager::spectrum(im) == 3) im <- imager::sRGBtoLab(im)
+  if (imager::spectrum(im) == 3) im <- imager::sRGBtoLab(im)
   sc.spat <- (dim(im)[1:2]*.28) %>% max
   sc.col <- imager::imsplit(im, "c") %>% purrr::map_dbl(sd) %>% max
   rat <- (sc.spat/sc.col)/(compactness*10)
@@ -459,6 +539,23 @@ slic <- function (im, nS, compactness = 1) {
   return(sp)
 }
 
+
+# Run SLIC algorithm on an example image
+im <- imager::load.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/Aster_Tataricus.JPG/1024px-Aster_Tataricus.JPG")
+out <- slic(im, 600)
+par(mfrow = c(1, 2), mar = c(0,0,0,0))
+plot(im, axes = FALSE)
+(out*abs(imlap(out) == 0)) %>% plot(axes = FALSE)
+
+```
+
+## Mask images
+***
+
+Now we can define the custom masking function that takes an image of class "cimg" as input and returns a segmented image of class "pxset". Then we apply the custom masking function to our raw images using the `MaskImages` function.
+
+```{r masking, fig.width=12, fig.height=12}
+
 # Define mask function
 msk_fkn <- function (im) {
   im[im < mean(EBImage::otsu(im)*0.9)] <- 0
@@ -466,23 +563,33 @@ msk_fkn <- function (im) {
   out <- slic(im, nS = 600, compactness = 1)
   d <- imager::sRGBtoLab(out) %>% as.data.frame(wide = "c") %>%
         dplyr::select(-x, -y)
-
   km <- kmeans(d, 2)
   seg <- imager::as.cimg(km$cluster - 1, dim = c(dim(im)[1:2], 1, 1)) %>% imager::threshold()
 }
 
+# Apply masking function to 
 st.object <- MaskImages(st.object, custom.msk.fkn = msk_fkn, verbose = TRUE)
-st.object <- AlignImages(st.object, verbose = TRUE)
-
-par(mfrow = c(2, 2))
-for (i in 1:4) {
-  plot(as.cimg(st.object@rasterlists$processed.masks[[1]]))
-  points(subset(st.object@meta.data[, c("pixel_x", "pixel_y")]/(2000/400)))
-}
+plot(st.object, col="#00000000", type = "raw")
+plot(st.object, col="#00000000")
 
 ```
 
-Apply transformation to segmented output
+## Align images
+***
+
+Now that we have generated pretty decent masks for each tissue section, we can apply the alignment algorithm to find a transformation function. We will use section 1 as target for the alignment.
+
+```{r alignment, fig.width=12, fig.height=12}
+
+st.object <- AlignImages(st.object, reference.index = 1)
+plot(st.object, col = "#00000000")
+
+```
+
+## Apply transformation to segmented output
+***
+
+The next step will be to apply the transformation that we have just learned on the segmented nuclei. The `generate.map.affine` will be used to convert the transformation matrix into a function that takes a set of x and y coordinates. The `WarpCoords` function will then be usen to apply these function to the segmented nuclei x/y coordinates stored in our data.frames.
 
 ```{r transform_seg, fig.height=6, fig.width=6}
 
@@ -507,6 +614,7 @@ generate.map.affine <- function (
   return(map.affine)
 }
 
+# Define warp coordinates function
 WarpCoords <- function (
   st.object, df
 ) {
@@ -528,6 +636,7 @@ WarpCoords <- function (
   return(df)
 }
 
+# Apply warp functions
 dfs <- list(neurons = df.neurons, oligo = df.oligo, olig_neurons = df.oligo_neurons, unknown = df.unknown)
 dfs <- lapply(dfs, function(df) {
   df <- WarpCoords(st.object, df)
@@ -535,42 +644,46 @@ dfs <- lapply(dfs, function(df) {
 
 ```
 
+Now we can create a set of pixel coordinates for the spots (set1) and a set of pixel coordinates for the nuclei (set2) in the same coordinate system. To set the z axis correctly I have multiplied the sample number (1-4) by the width of a tissue section in pixels (pixels.per.um*10)
 
-```{r plot_seg_vs_aligned}
+```{r plot_seg_vs_aligned, fig.height=12, fig.width=12}
 
 set1 = st.object@meta.data[, c("warped_x", "warped_y", "sample")]
-set1$z <- pixels.per.um*12*as.numeric(set1$sample)
+set1$z <- pixels.per.um*10*as.numeric(set1$sample)
 set1 <- set1[, c("warped_x", "warped_y", "z")]
 set.list <- lapply(seq_along(dfs), function(i) {
   df <- dfs[[i]]
   set2 = df[, c("warped_x", "warped_y", "sample")]
-  set2$z <- set2$sample*pixels.per.um*12
+  set2$z <- set2$sample*pixels.per.um*10
   set2 <- set2[, c("warped_x", "warped_y", "z")]
 })
 
-par(mfrow = c(2, 2))
+par(mfrow = c(2, 2), mas=c(0,0,0,0))
 for(i in 1:4) {
   d <- dim(segmented.egfp.list[[i]][[1]])[2]
-  plot(subset(set1, sample == i)[, 1:2], xlim = c(0, d), ylim = c(0, d), axes=F)
-  points(subset(set2, sample == i)[, 1:2], col = "red", cex=0.2)
+  plot(subset(set1, z == i*pixels.per.um*10)[, 1:2], xlim = c(0, d), ylim = c(0, d), axes=F)
+  points(subset(set.list[[1]], z == i*pixels.per.um*10)[, 1:2], col = "red", cex=0.2)
 }
 
 ```
 
 
-## Distance
+## Distance estimate
+***
 
-Calculate distances between nuclei and Visium spots
+Now that we have the spot coordinates and the nuclei coordinates aligned and defined in the same coordinate system, we should be able to calculate pairwise distances between the two sets. Now, the distance will be defined as the 3D euclidean distance; d = sqrt((x2 - x1)^2 + (y2 - y1)^2 + (z2 - z1)^2)
+
+The mindists object is a list with one distance matrix for each one of the data.frames in the dfs list (neurons, oligondendrocytes, olig_neun and uknown). These matrices will have as many rows as there are spots and as many columns as there are segmented cells in the data.frame object.
 
 <br>
 ```{r distance}
 
+# Calculate pairwise distances
 mindists <- lapply(set.list, function(set2) {
   mindist <- apply(set1, 1, function(x) {
     sqrt(colSums((t(set2) - x)^2))
   })
 })
-
 
 # spot radius in microns
 sp.rad <- 27.5
@@ -585,8 +698,16 @@ thr <- pixels.per.um*sp.rad + pixels.per.um*cell.rad
 hist(mindists[[1]], breaks = 100)
 abline(v = thr, lty = "longdash", col = "red")
 
+```
+
+## Distance treshold
+***
+
+Now that we have set a threshold we can apply the threshold to select spots in proximity with nuclei and put the positions of both spots and neighboring nuclei into the dame data.frame.
+
+```{r threshold_cells}
 # Set all distances < thr to 0
-#mindists[mindists > thr] <- NA
+# mindists[mindists > thr] <- NA
 res.list <- lapply(seq_along(mindists), function(i) {
   df <- dfs[[i]]
   mindist <- mindists[[i]]
@@ -597,22 +718,38 @@ res.list <- lapply(seq_along(mindists), function(i) {
     inds = which(x <= thr)
     if (length(inds) > 0) {
       return(data.frame(celltype = ctype[inds], pixel_x_nuclei = df$warped_x[inds], 
-                        pixel_y_nuclei = df$warped_y[inds], barcode = spts[i], 
-                        sample = df$sample[inds], stringsAsFactors = F))
+                        pixel_y_nuclei = df$warped_y[inds], z_nuclei = df$sample[inds], 
+                        dist = x[inds], barcode = spts[i], 
+                        x_spot = st.object@meta.data$warped_x[i], y_spot = st.object@meta.data$pixel_y[i], 
+                        z_spot = as.integer(st.object@meta.data$sample[i]), stringsAsFactors = F))
     } else {
       return(NULL)
     }
   }))
 })
+all.cells <- do.call(rbind, res.list)
 
 ```
 
+With this data.frame we can for example summarize the number of neighboring cells for each spot.
+
+```{r get_cells_per_spots}
+
+summarized.cells <- all.cells %>% group_by(barcode, celltype) %>% 
+  summarize(celltype_f = n()) %>%
+  group_by(barcode) %>%
+  arrange(-celltype_f) %>% 
+  reshape2::dcast(formula = barcode ~ celltype, value.var = "celltype_f")
+
+head(summarized.cells)
+
+```
+
+
 ```{r 3D}
 
-all.cells <- do.call(rbind, res.list)
-
 library(plotly)
-plot_ly(subset(all.cells, !celltype %in% "unknown"), x = ~pixel_x_nuclei, y = ~pixel_y_nuclei, z = ~sample, color = ~celltype, size = 0.2)
+plot_ly(subset(all.cells, !celltype %in% "unknown"), x = ~pixel_x_nuclei, y = ~pixel_y_nuclei, z = ~z_nuclei, color = ~celltype, size = 0.2)
 
 ```
 
