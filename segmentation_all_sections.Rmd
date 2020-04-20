@@ -753,3 +753,11 @@ plot_ly(subset(all.cells, !celltype %in% "unknown"), x = ~pixel_x_nuclei, y = ~p
 
 ```
 
+```{r save_objects}
+
+saveRDS(segmented.list, file = "R_objects/segmented.list")
+saveRDS(segmented.egfp.list, file = "R_objects/segmented.egfp.list")
+saveRDS()
+
+```
+
