@@ -342,6 +342,8 @@ df.oligo <- data.frame()
 df.oligo_neurons <- data.frame()
 df.unknown <- data.frame()
 
+segmented.egfp.list <- readRDS("R_objects/segmented.egfp.list")
+
 for (i in seq_along(segmented.egfp.list)) {
   c(oligodendrocytes, neurons, oligodendrocytes_neurons, unknown) %<-% segmented.egfp.list[[i]]
   fts.moment.neurons <- computeFeatures.moment(neurons)
@@ -458,7 +460,8 @@ When creating the Staffli object using the `CreateStaffliObject` function we can
 ```{r alignment}
 
 library(STutility)
-
+library(EBImage)
+setwd("~/Michael_Ratz/cell_segmentation/")
 # Get HE images
 he.images <- list.files(pattern = "neun.tif", path = "data", recursive = TRUE, full.names = TRUE)[2:5]
 
@@ -583,6 +586,8 @@ Now that we have generated pretty decent masks for each tissue section, we can a
 
 st.object <- AlignImages(st.object, reference.index = 1)
 plot(st.object, col = "#00000000")
+
+saveRDS(st.object, file = "R_objects/st.object")
 
 ```
 
@@ -757,7 +762,6 @@ plot_ly(subset(all.cells, !celltype %in% "unknown"), x = ~pixel_x_nuclei, y = ~p
 
 saveRDS(segmented.list, file = "R_objects/segmented.list")
 saveRDS(segmented.egfp.list, file = "R_objects/segmented.egfp.list")
-saveRDS()
 
 ```
 
