@@ -277,8 +277,25 @@ schematic.plot(datasetSpots,  mm.grid = FALSE, scale.bar = TRUE, device = FALSE)
 #revert back
 datasetSpots$color <- color.from.acronym(datasetSpots$acronym)
 
-#make webmap
-makewebmap(imdapi_mod, myfilter, regi, dataset = datasetSpots, scale = 3)
-
-getwd()
+# make webmap
+# Ludvig:
+#   couldn't make this work ...
+# makewebmap(imdapi_mod, myfilter, regi, dataset = datasetSpots, scale = 3)
 save.image()
+
+
+# Add info to st.object meta.data
+gg <- subset(st.object@meta.data, sample == "1")
+gg$acronym <- datasetSpots$acronym
+gg$color <- datasetSpots$color
+gg$color <- ifelse(is.na(gg$color), "white", gg$color)
+
+library(magrittr)
+library(dplyr)
+gg %>% group_by(acronym) %>% summarize(mx = median(warped_x), my = median(warped_y))
+
+# Plot results
+ggplot(gg, aes(warped_x, warped_y)) +
+  geom_point(fill = gg$color, shape = 21, size = 2, stroke = 0.2) +
+  coord_flip() +
+  theme_void() 
