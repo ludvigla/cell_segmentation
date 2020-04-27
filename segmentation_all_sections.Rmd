@@ -365,11 +365,17 @@ head(df.neurons)
 
 Now we can read the spot coordinates and convert them to fit the "tissue_hires_image.png" using the "tissue_hires_scalef" scaling factor. We will load this spot coordinates from all four datasets and store them in a list of data.frames called spots. We have to subset the data to contain spots under tissue by keeping spots where the selection column is 1. The spots data.frames also contains the spot barcodes which we can use as a unique ID to keep track of the spots across different sections. However, first we need to make these IDs unique across section by adding some section-specific label.
 
+NOTE that I have included all 8 sections here, but only sections v13-v16 will be used for analyses together with the segmented results.
+
 <br>
 ```{r load_spots}
 
 # Read spot coordinates
-positions.files <- c("data/spaceranger/V13/spatial/tissue_positions_list.csv",
+positions.files <- c("data/spaceranger/V9/spatial/tissue_positions_list.csv",
+                     "data/spaceranger/V10/spatial/tissue_positions_list.csv",
+                     "data/spaceranger/V11/spatial/tissue_positions_list.csv",
+                     "data/spaceranger/V12/spatial/tissue_positions_list.csv",
+                     "data/spaceranger/V13/spatial/tissue_positions_list.csv",
                      "data/spaceranger/V14/spatial/tissue_positions_list.csv",
                      "data/spaceranger/V15/spatial/tissue_positions_list.csv",
                      "data/spaceranger/V16/spatial/tissue_positions_list.csv")
@@ -379,7 +385,11 @@ spots <- lapply(positions.files, function(positions) {
 })
 
 # Read json file containing scaling factors
-scalefactors.files <- c("data/spaceranger/V13/spatial/scalefactors_json.json",
+scalefactors.files <- c("data/spaceranger/V9/spatial/scalefactors_json.json",
+                        "data/spaceranger/V10/spatial/scalefactors_json.json",
+                        "data/spaceranger/V11/spatial/scalefactors_json.json",
+                        "data/spaceranger/V12/spatial/scalefactors_json.json",
+                        "data/spaceranger/V13/spatial/scalefactors_json.json",
                         "data/spaceranger/V14/spatial/scalefactors_json.json",
                         "data/spaceranger/V15/spatial/scalefactors_json.json",
                         "data/spaceranger/V16/spatial/scalefactors_json.json")
@@ -391,7 +401,7 @@ spots <- setNames(lapply(seq_along(spots), function(i) {
   x <- subset(x, selection == 1)
   x$barcode <- paste0(x$barcode, "_", i) # Add section label
   return(x)
-}), nm = c("v13", "v14", "v15", "v16"))
+}), nm = c("v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16"))
 
 # Get pixels per micron from known image size and number of pixels
 image.size.micron <- 8705 
@@ -462,26 +472,46 @@ When creating the Staffli object using the `CreateStaffliObject` function we can
 library(STutility)
 library(EBImage)
 setwd("~/Michael_Ratz/cell_segmentation/")
-# Get HE images
-he.images <- list.files(pattern = "neun.tif", path = "data", recursive = TRUE, full.names = TRUE)[2:5]
+
+# Get Neun images for v13-v16
+neun.images <- list.files(pattern = "neun.tif", path = "data", recursive = TRUE, full.names = TRUE)[2:5]
 
 # Normalize intensity values and export as jpeg
-for (he in he.images) {
-  img <- readImage(he)
+for (neun in neun.images) {
+  img <- readImage(neun)
   img <- normalize(img)
   writeImage(x = img, files = paste0(dirname(he), "/neun_mod.jpg"))
 }
 
 # List the paths to the modified jpegs
-he.images <- list.files(pattern = "neun_mod.jpg", path = "data", recursive = TRUE, full.names = TRUE)
-json <- list.files(pattern = "scalefactors", path = "data/spaceranger", recursive = TRUE, full.names = TRUE)[4:7]
+neun.images.mod <- list.files(pattern = "neun_mod.jpg", path = "data", recursive = TRUE, full.names = TRUE)
+he.images <- list.files(pattern = "tissue_hires_image", path = "data", recursive = TRUE, full.names = TRUE)
+he.images <- setNames(he.images, lapply(he.images, function(x) {
+  (dirname(x) %>% strsplit("/"))[[1]][3]
+}))
+he.images <- he.images[paste0("v", 9:12)]
+
+# Replace v13-v16 he images with modified Neun images
+he.images <- c(he.images, setNames(neun.images.mod, nm = c("v13", "v14", "v15", "v16")))
+
+# List scalefactor files
+json <- list.files(pattern = "scalefactors", path = "data/spaceranger", recursive = TRUE, full.names = TRUE)
+json <- setNames(json, lapply(json, function(x) {
+  (dirname(x) %>% strsplit("/"))[[1]][3]
+}))
+json <- json[paste0("v", 9:16)]
 
 # Create a data.frame with spot coordinates to use as meta.data for the Staffli object
-spotfiles <- list.files(pattern = "tissue_positions", path = "data/spaceranger", recursive = TRUE, full.names = TRUE)[4:7]
-meta.data <- do.call(rbind, lapply(seq_along(spotfiles), function(i) {
+spotfiles <- list.files(pattern = "tissue_positions", path = "data/spaceranger", recursive = TRUE, full.names = TRUE)
+spotfiles <- setNames(spotfiles, lapply(spotfiles, function(x) {
+  (dirname(x) %>% strsplit("/"))[[1]][3]
+}))
+spotfiles <- spotfiles[paste0("v", 9:16)]
+
+meta.data.v9tov12 <- do.call(rbind, lapply(seq_along(spotfiles[1:4]), function(i) {
   alignment <- read.table(file = spotfiles[i], header = FALSE, sep = ",", stringsAsFactors = FALSE)
   alignment <- setNames(alignment, nm = c("barcode", "selection", "y", "x", "pixel_y", "pixel_x"))
-  sf <- jsonlite::read_json(path = json[i])$tissue_hires_scalef*resize
+  sf <- jsonlite::read_json(path = json[i])$tissue_hires_scalef
   alignment$pixel_x <- alignment$pixel_x*sf
   alignment$pixel_y <- alignment$pixel_y*sf
   alignment <- subset(alignment, selection == 1)
@@ -493,17 +523,37 @@ meta.data <- do.call(rbind, lapply(seq_along(spotfiles), function(i) {
   return(alignment)
 }))
 
-# Create Staffli object
-st.object <- CreateStaffliObject(imgs = he.images, meta.data = meta.data, xdim = 400, platforms = rep("Visium", 4))
-st.object
+meta.data.v13tov16 <- do.call(rbind, lapply(seq_along(spotfiles[5:8]), function(i) {
+  alignment <- read.table(file = spotfiles[i + 4], header = FALSE, sep = ",", stringsAsFactors = FALSE)
+  alignment <- setNames(alignment, nm = c("barcode", "selection", "y", "x", "pixel_y", "pixel_x"))
+  sf <- jsonlite::read_json(path = json[i + 4])$tissue_hires_scalef*resize
+  alignment$pixel_x <- alignment$pixel_x*sf
+  alignment$pixel_y <- alignment$pixel_y*sf
+  alignment <- subset(alignment, selection == 1)
+  alignment$barcode <- paste0(alignment$barcode, "_", i) # Add unique section label
+  alignment <- data.frame(x = alignment$x, y = alignment$y, adj_x = alignment$x, adj_y = alignment$y,
+                          pixel_x = alignment$pixel_x, pixel_y = alignment$pixel_y, barcode = alignment$barcode,
+                          sample = paste0(i), stringsAsFactors = FALSE)
+  rownames(alignment) <- paste0(alignment$x, "x", alignment$y, "_", i)
+  return(alignment)
+}))
+
+# Create Staffli object for v9-v12
+st.object.v9tov12 <- CreateStaffliObject(imgs = he.images[1:4], meta.data = meta.data.v9tov12, 
+                                         xdim = 400, platforms = rep("Visium", 4))
+st.object.v9tov12
+st.object.v13tov16 <- CreateStaffliObject(imgs = he.images[5:8], meta.data = meta.data.v13tov16, 
+                                         xdim = 400, platforms = rep("Visium", 4))
+st.object.v13tov16
 
 ```
 
-If we apply the plot function to our Staffli object we will simply plot thespot coordinates
+If we apply the plot function to our Staffli object we will simply plot the spot coordinates
 
 ```{r plot_Staffli_new, fig.height=12, fig.width=12}
 
-plot(st.object)
+plot(st.object.v9tov12)
+plot(st.object.v13tov16)
 
 ```
 
@@ -511,9 +561,13 @@ We can now load the Neun images and visualize the spots on top of them. The imag
 
 ```{r load_images, fig.width=12, fig.height=12}
 
-# Load images
-st.object <- LoadImages(st.object, time.resolve = FALSE, verbose = TRUE)
-plot(st.object, col = "red")
+# Load images for v9 to v12
+st.object.v9tov12 <- LoadImages(st.object.v9tov12, time.resolve = FALSE, verbose = TRUE)
+plot(st.object.v9tov12, col = "red")
+
+# Load images for v13 to v16
+st.object.v13tov16 <- LoadImages(st.object.v13tov16, time.resolve = FALSE, verbose = TRUE)
+plot(st.object.v13tov16, col = "red")
 
 ```
 
@@ -548,7 +602,7 @@ im <- imager::load.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f
 out <- slic(im, 600)
 par(mfrow = c(1, 2), mar = c(0,0,0,0))
 plot(im, axes = FALSE)
-(out*abs(imlap(out) == 0)) %>% plot(axes = FALSE)
+(out*abs(imager::imlap(out) == 0)) %>% plot(axes = FALSE)
 
 ```
 
@@ -556,6 +610,19 @@ plot(im, axes = FALSE)
 ***
 
 Now we can define the custom masking function that takes an image of class "cimg" as input and returns a segmented image of class "pxset". Then we apply the custom masking function to our raw images using the `MaskImages` function.
+
+### Mask images for v9-v12
+
+```{r masking, fig.width=12, fig.height=12}
+
+# Apply masking function to 
+st.object.v9tov12 <- MaskImages(st.object.v9tov12, verbose = TRUE)
+plot(st.object.v9tov12, col="#00000000", type = "raw")
+plot(st.object.v9tov12, col="#00000000")
+
+```
+
+### Mask images for v13-v16
 
 ```{r masking, fig.width=12, fig.height=12}
 
@@ -571,9 +638,43 @@ msk_fkn <- function (im) {
 }
 
 # Apply masking function to 
-st.object <- MaskImages(st.object, custom.msk.fkn = msk_fkn, verbose = TRUE)
-plot(st.object, col="#00000000", type = "raw")
-plot(st.object, col="#00000000")
+st.object.v13tov16 <- MaskImages(st.object.v13tov16, custom.msk.fkn = msk_fkn, verbose = TRUE)
+plot(st.object.v13tov16, col="#00000000", type = "raw")
+plot(st.object.v13tov16, col="#00000000")
+
+```
+
+### Merge st.objects (optional)
+
+Now we can combine these two objects into one st.object. This is a bit overcomplicated when working with a Staffli object, but it's relatively straightforward to run in STUtility on a Seurat object.
+
+```{r merge_st_objects}
+
+imgs <- setNames(c(st.object.v9tov12@imgs, st.object.v13tov16@imgs), nm = paste0(1:8))
+rasterlists <- list()
+rasterlists[["raw"]] <- setNames(c(st.object.v9tov12@rasterlists$raw, st.object.v13tov16@rasterlists$raw), nm = paste0(1:8))
+rasterlists[["masked"]] <- setNames(c(st.object.v9tov12@rasterlists$masked, st.object.v13tov16@rasterlists$masked), nm = paste0(1:8))
+rasterlists[["masked.masks"]] <- setNames(c(st.object.v9tov12@rasterlists$masked.masks, st.object.v13tov16@rasterlists$masked.masks), nm = paste0(1:8))
+m2 <- st.object.v13tov16@meta.data
+m2$sample <- paste0(as.integer(m2$sample) + 4)
+m2$barcode <- paste0(gsub(pattern = "_[1-9]", replacement = "", x = m2$barcode), "_", m2$sample)
+rownames(m2) <- paste0(gsub(pattern = "_[1-9]", replacement = "", x = rownames(m2)), "_", m2$sample)
+st.meta.data <- rbind(st.object.v9tov12@meta.data[, 1:8], m2)
+limits <- setNames(c(st.object.v9tov12@limits, st.object.v13tov16@limits), nm = paste0(1:8))
+dims <- setNames(c(st.object.v9tov12@dims, st.object.v13tov16@dims), nm = paste0(1:8))
+pixels.per.um <- setNames(c(st.object.v9tov12@pixels.per.um, st.object.v13tov16@pixels.per.um), nm = paste0(1:8))
+
+st.object <- st.object.v9tov12
+st.object@imgs <- imgs
+st.object@rasterlists <- rasterlists
+st.object@meta.data <- st.meta.data
+st.object@limits <- limits
+st.object@dims <- dims
+st.object@platforms <- rep("Visium", 8)
+st.object@samplenames <- paste0(1:8)
+st.object@pixels.per.um <- pixels.per.um
+
+plot(st.object, col = "red", cex = 0.2)
 
 ```
 
@@ -584,12 +685,53 @@ Now that we have generated pretty decent masks for each tissue section, we can a
 
 ```{r alignment, fig.width=12, fig.height=12}
 
-st.object <- AlignImages(st.object, reference.index = 1)
-plot(st.object, col = "#00000000")
+st.object.v9tov12 <- AlignImages(st.object.v9tov12, reference.index = 1)
+plot(st.object.v9tov12, col = "#00000000")
 
-saveRDS(st.object, file = "R_objects/st.object")
+st.object.v13tov16 <- ManualAlignImages(st.object.v13tov16, reference.index = 1)
+st.object.v13tov16.rotated <- st.object.v13tov16
+st.object.v13tov16.rotated@meta.data[, c("pixel_x", "pixel_y")] <- st.object.v13tov16.rotated@meta.data[, c("warped_x", "warped_y")]
+st.object.v13tov16.rotated@rasterlists$masked <- st.object.v13tov16.rotated@rasterlists$processed
+st.object.v13tov16.rotated@rasterlists$masked.masks <- st.object.v13tov16.rotated@rasterlists$processed.masks
+st.object.v13tov16.rotated <- WarpImages(st.object.v13tov16.rotated, transforms = list("1" = list("angle" = 90), "2" = list("angle" = 90), "3" = list("angle" = 90), "4" = list("angle" = 90)))
+plot(st.object.v13tov16.rotated, col = "#00000000")
+
+saveRDS(st.object.v13tov16.rotated, file = "R_objects/st.object.v13tov16.rotated")
+saveRDS(st.object.v9tov12, file = "R_objects/st.object.st.object.v9tov12")
 
 ```
+
+## Warped coordinates
+***
+
+```{r plot_warped_coords, fig.height=6, fig.width=12}
+
+p1 <- ggplot(st.object.v9tov12@meta.data, aes(warped_x, 2e3 - warped_y, color = sample)) +
+  geom_point(size = 0.5) +
+  theme_void() +
+  ggtitle("Aligned coordinates v9 - v12") +
+  scale_color_manual(values = c("#4477AA", "#117733", "#DDCC77", "#CC6677"))
+p2 <- ggplot(st.object.v9tov12@meta.data, aes(warped_x, 2e3 - warped_y, color = sample)) +
+  geom_point(size = 0.7) +
+  theme_void() +
+  facet_wrap(~sample) +
+  scale_color_manual(values = c("#4477AA", "#117733", "#DDCC77", "#CC6677"))
+cowplot::plot_grid(p1, p2)
+
+p1 <- ggplot(st.object.v13tov16.rotated@meta.data, aes(warped_x, 2e3 - warped_y, color = sample)) +
+  geom_point(size = 0.5) +
+  theme_void() +
+  ggtitle("Aligned coordinates v13 - v16") +
+  scale_color_manual(values = c("#4477AA", "#117733", "#DDCC77", "#CC6677"))
+p2 <- ggplot(st.object.v9tov12@meta.data, aes(warped_x, 2e3 - warped_y, color = sample)) +
+  geom_point(size = 0.7) +
+  theme_void() +
+  facet_wrap(~sample) +
+  scale_color_manual(values = c("#4477AA", "#117733", "#DDCC77", "#CC6677"))
+cowplot::plot_grid(p1, p2)
+
+```
+
 
 ## Apply transformation to segmented output
 ***
@@ -625,14 +767,14 @@ WarpCoords <- function (
 ) {
   df <- df[, 1:4]
   df <- cbind(df, data.frame(warped_x = NA, warped_y = NA))
-  for (i in seq_along(st.object@samplenames)) {
+  for (i in 1:4) {
     dims.raw <- st.object@dims[[i]][, c("width", "height")] %>% as.numeric()
     dims.scaled <- scaled.imdims(st.object)[[i]]
     sf.xy <- dims.raw[2]/dims.scaled[1]
     
     tr <- st.object@transformations[[i]]
     map.affine.forward <- generate.map.affine(tr, forward = TRUE)
-    df_subset <- subset(df, sample == i)
+    df_subset <- subset(df, sample == paste0(i))
     df_subset[, c("x", "y")] <- df_subset[, c("x", "y")]/sf.xy
     warped_xy <- do.call(cbind, map.affine.forward(x = df_subset$x, y = df_subset$y))
     warped_xy <- warped_xy*sf.xy
@@ -644,7 +786,7 @@ WarpCoords <- function (
 # Apply warp functions
 dfs <- list(neurons = df.neurons, oligo = df.oligo, olig_neurons = df.oligo_neurons, unknown = df.unknown)
 dfs <- lapply(dfs, function(df) {
-  df <- WarpCoords(st.object, df)
+  df <- WarpCoords(st.object.v13tov16, df)
 })
 
 ```
@@ -653,21 +795,18 @@ Now we can create a set of pixel coordinates for the spots (set1) and a set of p
 
 ```{r plot_seg_vs_aligned, fig.height=12, fig.width=12}
 
-set1 = st.object@meta.data[, c("warped_x", "warped_y", "sample")]
-set1$z <- pixels.per.um*10*as.numeric(set1$sample)
-set1 <- set1[, c("warped_x", "warped_y", "z")]
+set1 = st.object.v13tov16@meta.data[, c("warped_x", "warped_y", "sample")]
+
 set.list <- lapply(seq_along(dfs), function(i) {
   df <- dfs[[i]]
   set2 = df[, c("warped_x", "warped_y", "sample")]
-  set2$z <- set2$sample*pixels.per.um*10
-  set2 <- set2[, c("warped_x", "warped_y", "z")]
 })
 
-par(mfrow = c(2, 2), mas=c(0,0,0,0))
+par(mfrow = c(2, 2), mar = c(0, 0, 0, 0))
 for(i in 1:4) {
   d <- dim(segmented.egfp.list[[i]][[1]])[2]
-  plot(subset(set1, z == i*pixels.per.um*10)[, 1:2], xlim = c(0, d), ylim = c(0, d), axes=F)
-  points(subset(set.list[[1]], z == i*pixels.per.um*10)[, 1:2], col = "red", cex=0.2)
+  plot(subset(set1, sample == i)[, 1:2], xlim = c(0, d), ylim = c(0, d), axes = F)
+  points(subset(set.list[[1]], sample == i)[, 1:2], col = "red", cex = 0.2)
 }
 
 ```
@@ -682,6 +821,10 @@ The mindists object is a list with one distance matrix for each one of the data.
 
 <br>
 ```{r distance}
+
+pixels.per.um <- image.size.pixel/image.size.micron
+set1 <- set1[, 1:2]
+set.list <- lapply(set.list, function(set) {set[, 1:2]})
 
 # Calculate pairwise distances
 mindists <- lapply(set.list, function(set2) {
@@ -723,10 +866,9 @@ res.list <- lapply(seq_along(mindists), function(i) {
     inds = which(x <= thr)
     if (length(inds) > 0) {
       return(data.frame(celltype = ctype[inds], pixel_x_nuclei = df$warped_x[inds], 
-                        pixel_y_nuclei = df$warped_y[inds], z_nuclei = df$sample[inds], 
-                        dist = x[inds], barcode = spts[i], 
-                        x_spot = st.object@meta.data$warped_x[i], y_spot = st.object@meta.data$pixel_y[i], 
-                        z_spot = as.integer(st.object@meta.data$sample[i]), stringsAsFactors = F))
+                        pixel_y_nuclei = df$warped_y[inds], dist = x[inds], barcode = spts[i], 
+                        x_spot = st.object.v13tov16@meta.data$warped_x[i], y_spot = st.object.v13tov16@meta.data$pixel_y[i], 
+                        sample = df$sample[inds], stringsAsFactors = F))
     } else {
       return(NULL)
     }
@@ -736,17 +878,26 @@ all.cells <- do.call(rbind, res.list)
 
 ```
 
-With this data.frame we can for example summarize the number of neighboring cells for each spot.
+With this data.frame we can for example summarize the number of neighboring cells for each spot. 4 barcodes have been duplicated here, probably due to the fact that they have been assigned both an "unknown" label and an "oligo_neurons" label. We can just subset the data.frame to exclude these if we want to.
 
 ```{r get_cells_per_spots}
 
-summarized.cells <- all.cells %>% group_by(barcode, celltype) %>% 
-  summarize(celltype_f = n()) %>%
-  group_by(barcode) %>%
-  arrange(-celltype_f) %>% 
-  reshape2::dcast(formula = barcode ~ celltype, value.var = "celltype_f")
+# Alt.1 : count all neighboring cells
+summarized.cells <- all.cells %>% 
+  group_by(barcode, celltype) %>% # Group data.frame by celltype and barcode
+  summarize(celltype_f = n()) %>% # summarize for each celltype/barcode group the number of detected cells
+  group_by(barcode) %>% # regroup data.frame by barcode only
+  arrange(-celltype_f) %>% # Arrange each group by distances, from shortest to longest
+  reshape2::dcast(formula = barcode ~ celltype, value.var = "celltype_f") # recast results into a wide format to keep 1 column per celltype
 
-head(summarized.cells)
+# Alt.2 : keep only closest neighbor
+summarized.cells.keep.one <- all.cells %>% 
+  group_by(barcode) %>% # group data.frame by barcode only
+  top_n(n = 1, wt = -dist) # select cell with shortest distance for each barcode
+
+cat("duplicated spots: ",  duplicated(summarized.cells.keep.one$barcode) %>% sum())
+subset(summarized.cells.keep.one, barcode %in% summarized.cells.keep.one$barcode[duplicated(summarized.cells.keep.one$barcode)])
+
 
 ```
 
@@ -754,7 +905,7 @@ head(summarized.cells)
 ```{r 3D}
 
 library(plotly)
-plot_ly(subset(all.cells, !celltype %in% "unknown"), x = ~pixel_x_nuclei, y = ~pixel_y_nuclei, z = ~z_nuclei, color = ~celltype, size = 0.2)
+plot_ly(subset(all.cells, !celltype %in% "unknown"), x = ~pixel_x_nuclei, y = ~pixel_y_nuclei, z = ~sample, color = ~celltype, size = 0.2)
 
 ```
 
