@@ -1034,7 +1034,7 @@ for (i in 1:40) {
 
 The clusters are probably very similary to the ones obtained using PCA, but I think the UMAP looks pretty neat in comparison
 
-```{r umap_nmf, fig.width=12, fig.height=12}
+```{r umap_nmf, fig.width=8, fig.height=7}
 
 brain.merge <- RunUMAP(brain.merge, dims = 1:40, reduction = "NMF", reduction.key = "UMAPNMF_", reduction.name = "umap.nmf")
 brain.merge <- RunUMAP(brain.merge, dims = 1:40, reduction = "NMF", n.components = 3, reduction.key = "UMAPNMF3D_", reduction.name = "umap.nmf.3d")
@@ -1106,6 +1106,15 @@ CMYKPlot <- function (
 CMYKPlot(brain.merge, reduction = "umap.nmf.3d", pt.size = 2)
 
 ```
+
+```{r plot_clusters, fig.height=4, fig.width=16}
+
+cluster.cols <- c('#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080', '#ffffff', '#000000')
+
+SpatialPlot(brain.merge, cols = cluster.cols)
+
+```
+
 
 ### DE analysis of clusters
 ***
