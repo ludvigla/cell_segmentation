@@ -916,3 +916,205 @@ saveRDS(segmented.egfp.list, file = "R_objects/segmented.egfp.list")
 
 ```
 
+
+## Plot clones
+***
+
+```{r plot_clones}
+
+# Load st.object for v9-v12
+st.object.v9tov12 <- readRDS(file = "R_objects/st.object.st.object.v9tov12")
+ids <- c("V9", "V10", "V11", "V12")
+rownames(st.object.v9tov12@meta.data) <- paste0(ids[st.object.v9tov12@meta.data$sample %>% as.numeric()], "_", 
+                                                         gsub(pattern = "_[1-4]$", replacement = "", x = st.object.v9tov12@meta.data$barcode))
+# Load st.object for v13-v16
+st.object.v13tov16.rotated <- readRDS(file = "R_objects/st.object.v13tov16.rotated")
+ids <- c("V13", "V14", "V15", "V16")
+rownames(st.object.v13tov16.rotated@meta.data) <- paste0(ids[st.object.v13tov16.rotated@meta.data$sample %>% as.numeric()], "_", 
+                                                         gsub(pattern = "_[1-4]$", replacement = "", x = st.object.v13tov16.rotated@meta.data$barcode))
+
+# Load Seurat object
+load("data/merged.Rds")
+brain.merge
+
+# Export aligned HE image reference (section 1 from st.object.v9tov12.rotated)
+library(magick)
+lims <- st.object.v9tov12@dims[[1]][2:3] %>% as.numeric()
+imr <- image_read(st.object.v9tov12@rasterlists$processed$`1`) %>% 
+  image_scale(paste0(lims[1])) %>% 
+  as.raster()
+jpeg(filename = "results/reference_images/HE_aligned.jpeg", width = lims[1], height = lims[2])
+par(mar = c(0, 0, 0, 0))
+plot(imr)
+dev.off()
+
+# Export aligned Dapi image reference (section 1 st.object.v13tov16)
+lims <- st.object.v13tov16.rotated@dims[[1]][2:3] %>% as.numeric()
+imr <- image_read(st.object.v13tov16.rotated@rasterlists$processed$`1`) %>% 
+  image_scale(paste0(lims[1])) %>% 
+  as.raster()
+jpeg(filename = "results/reference_images/Dapi_aligned.jpeg", width = lims[1], height = lims[2])
+par(mar = c(0, 0, 0, 0))
+plot(imr)
+dev.off()
+
+```
+
+
+```{r plot_clone_fkn, fig.width=7, fig.height=6}
+
+PlotFeatures <- function (
+  object, 
+  st.object, 
+  atlas.img,
+  feature = "cloneID",
+  selected.clones = "0",
+  pt.size = 2,
+  pt.alpha = 1
+) {
+  if (!all(c("warped_x", "warped_y") %in% colnames(st.object@meta.data))) stop("Warped coordinates are missing in st.object")
+  gg <- cbind(st.object@meta.data[, c("warped_x", "warped_y", "sample")])
+  if (!feature %in% colnames(object@meta.data)) stop(paste0("feature ", feature, " is missing in Seurat object"))
+  if (!class(object@meta.data[, feature]) %in% c("character", "factor")) stop(paste0("invalid class '", class(object@meta.data[, feature]), "' of selected feature"))
+  gg[, feature] <- object@meta.data[rownames(gg), feature]
+  imdims <- st.object@dims[[1]][2:3] %>% as.numeric()
+  gg <- gg[gg[, feature] %in% selected.clones, ]
+  
+  im <- image_read(atlas.img) %>% image_scale(paste0(imdims[1], "x", imdims[2])) %>% as.raster()
+  g <- grid::rasterGrob(im, width = unit(1, "npc"), height = unit(1, "npc"), interpolate = TRUE)
+  ggplot() +
+    annotation_custom(g, -Inf, Inf, -Inf, Inf) +
+    geom_point(data = gg, aes_string("warped_x", "imdims[2] - warped_y", fill = feature), shape = 21, size = pt.size, alpha = pt.alpha) +
+    theme_void() +
+    scale_x_continuous(limits = c(0, imdims[1]), expand = c(0, 0)) +
+    scale_y_continuous(limits = c(0, imdims[2]), expand = c(0, 0))
+}
+
+# Plot all clones
+PlotFeatures(object = brain.merge, st.object = st.object.v9tov12, selected.clones = unique(brain.merge$cloneID), atlas.img = "~/Michael_Ratz/cell_segmentation/data/atlas_reference-01.png", pt.alpha = 0.3)
+
+# Plot selected clone
+PlotFeatures(object = brain.merge, st.object = st.object.v9tov12, selected.clones = "5",
+             atlas.img = "~/Michael_Ratz/cell_segmentation/results/reference_images/atlas_reference-01.png")
+
+```
+
+## Non-negative Matrix Factorization (NNMF)
+***
+
+```{r nmf}
+
+brain.merge <- RunNMF(brain.merge, features = rownames(brain.merge@assays$SCT@scale.data), nfactors = 40)
+
+```
+
+### Plot NNMF factors
+***
+
+These factors are pretty useful for data exploration because thay are much easier to interpret than other dimensionality reduction vectors. In comparison with a PCA for example, the NNMF factors are always positive which makes them easier to interpret. I have also added the top 20 most contributing genes for each factor in a barplot to the right. I have only plotted the first factor, and the other ones I have exported as jpegs instead. 
+
+```{r plot_nmfs, fig.width=20, fig.height=5}
+
+p1 <- SpatialFeaturePlot(brain.merge, combine = FALSE, features = paste0("factor_", 1))
+p2 <- FactorGeneLoadingPlot(brain.merge, factor = 1)
+cowplot::plot_grid(cowplot::plot_grid(plotlist = p1, ncol = 4), p2, ncol = 2, rel_widths = c(4, 1)) %>% print()
+
+for (i in 1:40) {
+  jpeg(filename = paste0("data/NMF_plots/factor_", i, ".jpg"), width = 1600, height = 400)
+  p1 <- SpatialFeaturePlot(brain.merge, combine = FALSE, features = paste0("factor_", i))
+  p2 <- FactorGeneLoadingPlot(brain.merge, factor = i)
+  cowplot::plot_grid(cowplot::plot_grid(plotlist = p1, ncol = 4), p2, ncol = 2, rel_widths = c(4, 1)) %>% print()
+  dev.off()
+}
+
+```
+
+### UMAP on NNMF vectors
+***
+
+The clusters are probably very similary to the ones obtained using PCA, but I think the UMAP looks pretty neat in comparison
+
+```{r umap_nmf, fig.width=12, fig.height=12}
+
+brain.merge <- RunUMAP(brain.merge, dims = 1:40, reduction = "NMF", reduction.key = "UMAPNMF_", reduction.name = "umap.nmf")
+brain.merge <- RunUMAP(brain.merge, dims = 1:40, reduction = "NMF", n.components = 3, reduction.key = "UMAPNMF3D_", reduction.name = "umap.nmf.3d")
+brain.merge <- FindNeighbors(brain.merge, dims = 1:40, reduction = "NMF")
+brain.merge <- FindClusters(brain.merge)
+
+DimPlot(brain.merge, reduction = "umap.nmf")
+
+```
+
+### CMYK color coding of spots
+***
+
+```{r UMAP_CMYK, fig.height=12, fig.width=12}
+
+cmyk <- function(C,M,Y,K = 0) {
+  
+  C <- C / 100.0
+  M <- M / 100.0
+  Y <- Y / 100.0
+  K <- K / 100.0
+  
+  n.c <- (C * (1-K) + K)
+  n.m <- (M * (1-K) + K)  
+  n.y <- (Y * (1-K) + K)
+  
+  r.col <- ceiling(255 * (1-n.c))
+  g.col <- ceiling(255 * (1-n.m))
+  b.col <- ceiling(255 * (1-n.y))
+  
+  rgb(red = r.col, green = g.col, blue = b.col, maxColorValue = 255)
+}
+
+
+CMYKPlot <- function (
+  object, 
+  K = 0,
+  sampleid = NULL,
+  dims = 1:3,
+  reduction = "umap.nmf.3d",
+  pt.size = 1
+) {
+  um <- object[[reduction]]@cell.embeddings
+  if (length(dims) !=3) stop("3 dimensions must be selected")
+  signs <- sign(dims)
+  um <- um[, abs(dims)]
+  um <- t(t(um)*signs)
+  if (ncol(um) != 3) stop("Reduction must be 3 dimensions")
+  um <- apply(um, 2, scales::rescale, c(0, 100))
+  cols <- apply(um, 1, function(x) {
+    cmyk(C = x[1], M = x[2], Y = x[3], K = K)
+  })
+  gg <- do.call(rbind, lapply(seq_along(object@images), function(i) {
+    x <- object@images[[i]]
+    d <- x@coordinates
+    d$sample <- paste0(i)
+    return(d)
+  }))
+  gg$colors <- cols
+  if (!is.null(sampleid)) {
+    gg <- subset(gg, sample == paste0(sampleid))
+  }
+  ggplot(gg, aes(78 - col, row)) +
+    geom_point(color = gg$colors, size = pt.size) +
+    facet_wrap(~sample) +
+    theme_void()
+}
+
+CMYKPlot(brain.merge, reduction = "umap.nmf.3d", pt.size = 2)
+
+```
+
+### DE analysis of clusters
+***
+
+```{r de_analysis, fig.width=8, fig.height=20}
+
+de.markers <- FindAllMarkers(brain.merge)
+top5 <- de.markers %>% group_by(cluster) %>% top_n(n = 5, wt = avg_logFC)
+
+DotPlot(brain.merge, features = unique(top5$gene), cols = "RdBu") + coord_flip()
+
+```

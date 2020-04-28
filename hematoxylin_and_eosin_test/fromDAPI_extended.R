@@ -101,6 +101,10 @@ plot.registration(regi, border = 'orange')
 points(dataset$x, dataset$y, col = dataset$color, pch = 16, cex = 0.5)
 dev.off()
 #quartz.save('registration_results_extended.pdf', type = 'pdf', width = 12, height = 4)
+pdf(file = "registration_results_extended.pdf", width = dim(im)[2]/100, height = dim(im)[1]/100)
+plot.registration(regi, border = 'orange')
+dev.off()
+
 
 #stereotactic plot
 schematic.plot(dataset, cex = 0.35, col = F)
