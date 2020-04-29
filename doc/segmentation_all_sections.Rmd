@@ -1030,6 +1030,9 @@ PlotFeatures <- function (
     region.colors <- setNames(region.colors, gg_color_hue(length(region.colors)))
   }
   
+  # Shuffle positions
+  gg <- gg[sample(1:nrow(gg), size = nrow(gg), replace = FALSE), ]
+  
   # Load reference image and scale to fit dimesnions of reference HE image
   im <- image_read(atlas.img) %>% image_scale(paste0(imdims[1], "x", imdims[2])) %>% as.raster()
   g <- grid::rasterGrob(im, width = unit(1, "npc"), height = unit(1, "npc"), interpolate = TRUE)
