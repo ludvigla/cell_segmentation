@@ -963,31 +963,93 @@ dev.off()
 
 ```{r plot_clone_fkn, fig.width=7, fig.height=6}
 
+# Add some dummy color coding vector to show how to color spots by a specific feature
+convert.colors <- c('#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080', '#ffffff')
+names(convert.colors) <- unique(as.character(brain.merge$seurat_clusters))
+brain.merge$colors <- convert.colors[as.character(brain.merge$seurat_clusters)]
+
+#' Function used to draw clones onto Allen reference atlas
+#'
+#' @param object A Seurat object
+#' @param st.object A Staffli object
+#' @param atlas.img Path to a reference image aligned to the same HE reference image used for 
+#' alignmnent of the sections in the Staffli object
+#' @param feature Selected feature to display
+#' @param group.by Optional. Defines a grouping variable (in the Seurat object) to color the spots by
+#' @param color.by Optional. Defines a color vector (in the Seurat object) to use for color mapping onto the group.by variable
+#' @param selected.clones Selected id to draw (has to be present in the feature vector). Multiple ids can be selected. 
+#' @param pt.size Sets the point size
+#' @param pt.alpa Sets the point opacity
+#'
 PlotFeatures <- function (
   object, 
   st.object, 
   atlas.img,
   feature = "cloneID",
+  group.by = NULL,
+  color.by = NULL,
   selected.clones = "0",
   pt.size = 2,
   pt.alpha = 1
 ) {
+  # Check to see that the warped coordinates are present
   if (!all(c("warped_x", "warped_y") %in% colnames(st.object@meta.data))) stop("Warped coordinates are missing in st.object")
   gg <- cbind(st.object@meta.data[, c("warped_x", "warped_y", "sample")])
+  
+  # Check to see that the selected feature is present
   if (!feature %in% colnames(object@meta.data)) stop(paste0("feature ", feature, " is missing in Seurat object"))
+  
+  # Check to see that the selected variable is of class character or factor
   if (!class(object@meta.data[, feature]) %in% c("character", "factor")) stop(paste0("invalid class '", class(object@meta.data[, feature]), "' of selected feature"))
+  
+  # Structure data
   gg[, feature] <- object@meta.data[rownames(gg), feature]
+  if (!is.null(group.by)) {
+    gg[, group.by] <- object@meta.data[rownames(gg), group.by]
+  }
   imdims <- st.object@dims[[1]][2:3] %>% as.numeric()
   gg <- gg[gg[, feature] %in% selected.clones, ]
   
+  # Select coloring but only if one clone is selected. If multiple clones are selected we have to color them 
+  # by clone to distunguish them. If one clone is selected we can instead color them by another reference
+  if (!is.null(group.by) & !is.null(color.by)) {
+    if (length(selected.clones) > 1) stop("Only one clone can be selected when using a group variable")
+    region.colors <- sapply(1:nrow(object), function(i) {
+      setNames(object@meta.data[i, color.by], object@meta.data[i, group.by])
+    })
+    region.colors <- region.colors[!duplicated(names(region.colors))]
+  } else if (!is.null(group.by) & is.null(color.by)) {
+    if (length(selected.clones) > 1) stop("Only one clone can be selected when using a group variable")
+    region.colors <- sapply(1:nrow(object), function(i) {
+      object@meta.data[i, group.by]
+    })
+    gg_color_hue <- function(n) {
+      hues = seq(15, 375, length = n + 1)
+      hcl(h = hues, l = 65, c = 100)[1:n]
+    }
+    region.colors <- setNames(region.colors, gg_color_hue(length(region.colors)))
+  }
+  
+  # Load reference image and scale to fit dimesnions of reference HE image
   im <- image_read(atlas.img) %>% image_scale(paste0(imdims[1], "x", imdims[2])) %>% as.raster()
   g <- grid::rasterGrob(im, width = unit(1, "npc"), height = unit(1, "npc"), interpolate = TRUE)
-  ggplot() +
-    annotation_custom(g, -Inf, Inf, -Inf, Inf) +
-    geom_point(data = gg, aes_string("warped_x", "imdims[2] - warped_y", fill = feature), shape = 21, size = pt.size, alpha = pt.alpha) +
+  
+  p <- ggplot() +
+    annotation_custom(g, -Inf, Inf, -Inf, Inf) 
+  
+  if (!is.null(group.by)) {
+    p <- p +
+      geom_point(data = gg, aes_string("warped_x", "imdims[2] - warped_y", fill = group.by), shape = 21, size = pt.size, alpha = pt.alpha) +
+      ggtitle(paste0("Clone '", selected.clones, "' colored by ", group.by))
+  } else {
+    p <- p +
+      geom_point(data = gg, aes_string("warped_x", "imdims[2] - warped_y", fill = feature), shape = 21, size = pt.size, alpha = pt.alpha)
+  }
+    p <- p + 
     theme_void() +
     scale_x_continuous(limits = c(0, imdims[1]), expand = c(0, 0)) +
     scale_y_continuous(limits = c(0, imdims[2]), expand = c(0, 0))
+    return(p)
 }
 
 # Plot all clones
@@ -1126,4 +1188,8 @@ top5 <- de.markers %>% group_by(cluster) %>% top_n(n = 5, wt = avg_logFC)
 
 DotPlot(brain.merge, features = unique(top5$gene), cols = "RdBu") + coord_flip()
 
+```
+
+```{r export_seurat}
+saveRDS(brain.merge, file = "data/merged.Rds")
 ```

@@ -2,5 +2,6 @@
 .RData
 .DS_Store
 data/
+tests/
 .Rhistory
 .Rproj.user/
