@@ -971,6 +971,38 @@ convert.colors <- c('#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911
 names(convert.colors) <- unique(as.character(brain.merge$seurat_clusters))
 brain.merge$colors <- convert.colors[as.character(brain.merge$seurat_clusters)]
 
+regi <- readRDS(file = "../R_objects/registration_HE_V9")
+
+# Extract polygons
+PolExtract <- function(registration) {
+  d1 <- do.call(rbind, lapply(1:registration$atlas$numRegions, function(x) {
+    d <- data.frame(x = registration$atlas$outlines[[x]]$xlT, y = registration$atlas$outlines[[x]]$ylT)
+    d$region <- x
+    d$hemisphere <- "left"
+    d$region_combined <- paste0(d$region, "_", d$hemisphere)
+    d$color <- registration$atlas$col[x] %>% as.character()
+    return(d)
+  }))
+  d2 <- do.call(rbind, lapply(1:registration$atlas$numRegions, function(x) {
+    d <- data.frame(x = registration$atlas$outlines[[x]]$xrT, y = registration$atlas$outlines[[x]]$yrT)
+    d$region <- x
+    d$hemisphere <- "right"
+    d$region_combined <- paste0(d$region, "_", d$hemisphere)
+    d$color <- registration$atlas$col[x] %>% as.character()
+    return(d)
+  }))
+  df <- rbind(d1, d2)
+  return(df)
+}
+
+# Extract polygons from regi
+d <- PolExtract(regi)
+ggplot() + 
+  geom_polygon(data = d, aes(x, y, group = region_combined), fill = d$color, alpha = 1, color = NA) +
+  geom_polygon(data = d, aes(x, y, group = region_combined), alpha = 0, color = "black") +
+  theme_void() +
+  scale_y_reverse()
+
 #' Function used to draw clones onto Allen reference atlas
 #'
 #' @param object A Seurat object
@@ -987,10 +1019,15 @@ brain.merge$colors <- convert.colors[as.character(brain.merge$seurat_clusters)]
 PlotFeatures <- function (
   object, 
   st.object, 
-  atlas.img,
+  PNG.img,
+  TIF.img,
+  resize = 0.5,
+  polygon.data.frame,
   feature = "cloneID",
   group.by = NULL,
   color.by = NULL,
+  color.atlas = TRUE,
+  fill.atlas = FALSE,
   selected.clones = "0",
   pt.size = 2,
   pt.alpha = 1
@@ -1011,7 +1048,11 @@ PlotFeatures <- function (
     if (!group.by %in% colnames(object@meta.data)) stop(paste0("column '", group.by, "' is not present in the Seurat object meta data"))
     gg[, group.by] <- object@meta.data[rownames(gg), group.by]
   }
-  imdims <- st.object@dims[[1]][2:3] %>% as.numeric()
+  imdims.png <- (image_read(PNG.img) %>% image_info())[2:3] %>% as.numeric()
+  imdims.tif <- ((image_read(TIF.img) %>% image_info())[2:3] %>% as.numeric())/resize
+  
+  scale.factor <- imdims.tif[2]/imdims.png[2]
+  x_offset <- imdims.tif[1] - imdims.png[1]*scale.factor
   gg <- gg[gg[, feature] %in% selected.clones, ]
   
   # Select coloring but only if one clone is selected. If multiple clones are selected we have to color them 
@@ -1025,14 +1066,14 @@ PlotFeatures <- function (
     region.colors <- region.colors[!duplicated(names(region.colors))]
   } else if (!is.null(group.by) & is.null(color.by)) {
     if (length(selected.clones) > 1) stop("Only one clone can be selected when using a group variable")
-    region.colors <- sapply(1:nrow(object), function(i) {
+    region.colors <- as.character(sapply(1:nrow(object), function(i) {
       object@meta.data[i, group.by]
-    })
+    }))
     gg_color_hue <- function(n) {
       hues = seq(15, 375, length = n + 1)
       hcl(h = hues, l = 65, c = 100)[1:n]
     }
-    region.colors <- setNames(region.colors, gg_color_hue(length(region.colors)))
+    region.colors <- setNames(gg_color_hue(length(unique(region.colors))), unique(region.colors))
   } else {
     region.colors <- NULL
   }
@@ -1041,19 +1082,25 @@ PlotFeatures <- function (
   gg <- gg[sample(1:nrow(gg), size = nrow(gg), replace = FALSE), ]
   
   # Load reference image and scale to fit dimesnions of reference HE image
-  im <- image_read(atlas.img) %>% image_scale(paste0(imdims[1], "x", imdims[2])) %>% as.raster()
-  g <- grid::rasterGrob(im, width = unit(1, "npc"), height = unit(1, "npc"), interpolate = TRUE)
+  #im <- image_read(atlas.img) %>% image_scale(paste0(imdims[1], "x", imdims[2])) %>% as.raster()
+  #g <- grid::rasterGrob(im, width = unit(1, "npc"), height = unit(1, "npc"), interpolate = TRUE)
   
-  p <- ggplot() +
-    annotation_custom(g, -Inf, Inf, -Inf, Inf) 
+  p <- ggplot() 
+  
+  if (fill.atlas) {
+    p <- p + geom_polygon(data = d, aes(x, imdims.tif[2] - y, group = region_combined), fill = d$color, alpha = 1, color = NA)
+  }
+  if (color.atlas) {
+    p <- p + geom_polygon(data = d, aes(x, imdims.tif[2] - y, group = region_combined), alpha = 0, color = "black")
+  }
   
   if (!is.null(group.by)) {
     p <- p +
-      geom_point(data = gg, aes_string("warped_x", "imdims[2] - warped_y", fill = group.by), shape = 21, size = pt.size, alpha = pt.alpha) +
+      geom_point(data = gg, aes_string("x_offset + warped_x*scale.factor", "imdims.tif[2] - warped_y*scale.factor", fill = group.by), shape = 21, size = pt.size, alpha = pt.alpha) +
       ggtitle(paste0("Clone '", selected.clones, "' colored by ", group.by))
   } else {
     p <- p +
-      geom_point(data = gg, aes_string("warped_x", "imdims[2] - warped_y", fill = feature), shape = 21, size = pt.size, alpha = pt.alpha)
+      geom_point(data = gg, aes_string("x_offset + warped_x*scale.factor", "imdims.tif[2] - warped_y*scale.factor", fill = feature), shape = 21, size = pt.size, alpha = pt.alpha)
   }
   
   if (!is.null(region.colors)) {
@@ -1062,18 +1109,31 @@ PlotFeatures <- function (
   }
     
   p <- p + 
-  theme_void() +
-  scale_x_continuous(limits = c(0, imdims[1]), expand = c(0, 0)) +
-  scale_y_continuous(limits = c(0, imdims[2]), expand = c(0, 0))
+    theme_void() +
+    scale_x_continuous(limits = c(0, imdims.tif[1]), expand = c(0, 0)) +
+    scale_y_continuous(limits = c(0, imdims.tif[2]), expand = c(0, 0))
   return(p)
 }
 
 # Plot all clones
-PlotFeatures(object = brain.merge, st.object = st.object.v9tov12, selected.clones = unique(brain.merge$cloneID), atlas.img = "~/Michael_Ratz/cell_segmentation/data/atlas_reference-01.png", pt.alpha = 0.3)
+PlotFeatures(object = brain.merge, 
+             st.object = st.object.v9tov12, 
+             selected.clones = "0", 
+             polygon.data.frame = d, # Polygons extracted from registration object
+             PNG.img = "~/Michael_Ratz/cell_segmentation/data/spaceranger/v9/spatial/tissue_hires_image.png", # Image used for alignment with STUtility (check Staffli object : st.object)
+             TIF.img = "~/Michael_Ratz/cell_segmentation/hematoxylin_and_eosin_test/images/he_v9_extended.tif", # Image used for registration (modified version of original HE image, before running spaceranger)
+             pt.alpha = 0.3)
 
 # Plot selected clone
-PlotFeatures(object = brain.merge, st.object = st.object.v9tov12, selected.clones = "5",
-             atlas.img = "~/Michael_Ratz/cell_segmentation/results/reference_images/atlas_reference-01.png")
+PlotFeatures(object = brain.merge, 
+             st.object = st.object.v9tov12, 
+             selected.clones = "0", 
+             polygon.data.frame = d,
+             group.by = "seurat_clusters",
+             PNG.img = "~/Michael_Ratz/cell_segmentation/data/spaceranger/v9/spatial/tissue_hires_image.png", 
+             TIF.img = "~/Michael_Ratz/cell_segmentation/hematoxylin_and_eosin_test/images/he_v9_extended.tif",
+             pt.alpha = 0.4, 
+             fill.atlas = T)
 
 ```
 

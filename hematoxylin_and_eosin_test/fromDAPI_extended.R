@@ -19,12 +19,12 @@ coord <- -1.65
 #   image without any rotations or scaling, I decided to do this from R instead. I just think
 #   it's easier to keep track of whatever transformations were applied so that I can apply the same
 #   for the spots later.
-imdapi <- image_read("images/dapi_edited_extended.tif")
+imdapi <- image_read("images/he_v9.tif")
 
 # Ludvig: 
 #   Here I have rescaled the edited dapi tif image to 50% and rotated it by 90deg anti-clockwise
-imdapi <- image_scale(imdapi, paste0(image_info(imdapi)$width*0.5)) %>% image_rotate(degrees = -90)
-image_write(imdapi, path = "images/dapi_edited_extended_small_canvassize.tif")
+imdapi <- image_scale(imdapi, paste0(image_info(imdapi)$width*0.5)) #%>% image_rotate(degrees = -90)
+image_write(imdapi, path = "images/he_v9_extended.tif")
 
 # this is the filter we used it is a list object with the following parameters.
 # Ludvig: 
@@ -36,7 +36,7 @@ myfilter <- list(alim = c(1, 50), #area limits for what to consider as cell bodi
                Max = 60000, #Maximum value to display in the 8-bit rendered (sets sort of brightness contrast)
                Min = 0, #Minimum value to display in the 8-bit rendered (sets sort of brightness contrast)
                brain.threshold = 2800, #the exact value where you want to start segmeting the brain outline in autofluorescence.
-               resize = 0.28, #resize parameter to match the atlas to your pixel resolution, should be between 0.03 and 0.2 for most applications.
+               resize = 0.5, #0.28, resize parameter to match the atlas to your pixel resolution, should be between 0.03 and 0.2 for most applications.
                blur = 13, #blur parameter that sets the smoothness of the tissue outline, if magaded or jagged edges increase. Using a value fo 4 is usually recommended.
                downsample = 0.5 #downsample, default is set to 0.25 and images with a size of 15000 x 8000 pixels can then usually be run smoothly
 )
@@ -44,7 +44,7 @@ myfilter <- list(alim = c(1, 50), #area limits for what to consider as cell bodi
 # segmentation
 # Ludvig: 
 #   segmentation looks aweful, but not sure if it matters now.
-imdapi_mod <- "images/dapi_edited_extended_small_canvassize.tif"
+imdapi_mod <- "images/he_v9_extended.tif"
 quartz()
 seg <- segment(imdapi_mod, filter = myfilter, display = TRUE)
 
@@ -69,7 +69,7 @@ regi <- registration(imdapi_mod, filter = myfilter, coordinate = coord)
 # Ludvig: 
 #   these are coordinates I made, but they are not nearly as good as Daniels :-p
 #   I hope you will be able to run this so that you can do it more properly!
-regi$correspondance <- readRDS("correspondance.points.extended")
+#regi$correspondance <- readRDS("correspondance.points.extended")
 
 # Ludvig: 
 #   This part if what I ran to defines the correspondance points loaded above
@@ -81,12 +81,16 @@ regi$correspondance <- readRDS("correspondance.points.extended")
 # ----------------------------------------
 
 # update the registration
-regi <- registration(imdapi_mod, filter = myfilter, coordinate = coord, correspondance = regi)
+#regi <- registration(imdapi_mod, filter = myfilter, coordinate = coord, correspondance = regi)
 
 # Ludvig: 
 #   You can export the correspondance points as a data.frame. It's probably good to keep!
 # Save correspondance points 
 # saveRDS(regi$correspondance, file = "correspondance.points.extended")
+
+# Save registration
+saveRDS(object = regi, file = "../R_objects/registration_HE_V9")
+
 
 # dataset with all the cells registered.
 dataset <- get.cell.ids(regi, seg, forward.warp = TRUE)
@@ -305,3 +309,38 @@ ggplot(gg, aes(warped_x, warped_y)) +
   geom_point(fill = gg$color, shape = 21, size = 2, stroke = 0.2) +
   coord_flip() +
   theme_void() 
+
+
+
+# Plot outlined reference
+plot.registration.only <- function (
+  registration, 
+  border = rgb(154, 73, 109, maxColorValue = 255)
+) {
+  scale.factor <- mean(dim(registration$transformationgrid$mx)/c(registration$transformationgrid$height, registration$transformationgrid$width))
+  
+  img <- paste(registration$outputfile, "_undistorted.png", sep = "")
+  img <- readPNG(img)
+  par(mar = c(0, 0, 0, 0))
+  plot(NULL, ylim = c(dim(img)[1], 0), 
+       xlim = c(0, dim(img)[2]), asp = 1, axes = F, xlab = "", ylab = "", 
+       col = 0)
+  
+  if (!is.null(border)) {
+    lapply(1:registration$atlas$numRegions, function(x) {
+      polygon(registration$atlas$outlines[[x]]$xrT/scale.factor, 
+              registration$atlas$outlines[[x]]$yrT/scale.factor, 
+              border = border)
+    })
+    lapply(1:registration$atlas$numRegions, function(x) {
+      polygon(registration$atlas$outlines[[x]]$xlT/scale.factor, 
+              registration$atlas$outlines[[x]]$ylT/scale.factor, 
+              border = border)
+    })
+  }
+  
+}
+
+
+plot.registration.only(regi, border = "black")
+
