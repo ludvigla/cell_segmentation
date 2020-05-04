@@ -120,84 +120,90 @@ quartz.save('cells_in_atlas_extended.png', type='png')
 # read cells pixel coordinates form external file
 # cells <- read.table('cell_pixel_centroids.csv', sep=',', header =TRUE)
 # get from dataset revious segmentation dataset here instead
-st.object <- readRDS("../R_objects/st.object")
-spots <- setNames(st.object@meta.data[st.object@meta.data$sample == "1", c("pixel_x", "pixel_y")], nm = c("x", "y"))
+st.object <- readRDS("../R_objects/st.object.st.object.v9tov12")
+
+# Select sample
+# Now we should be able to select any of the V9-V12 samples (here called 1-4) since they are alreasdy aligned
+spots.list <- lapply(1:4, function(s) {
+  setNames(st.object@meta.data[st.object@meta.data$sample == paste0(s), c("warped_x", "warped_y")], nm = c("x", "y"))
+})
 
 # Here we need to apply the same transformations that were used for the DAPI images
 # First we need to define a couple of tranformation functions:
 
 # rigid translation allows for shifts along x/y axes
-rigid.transl <- function(h = 0, k = 0) {tr <-  matrix(c(1, 0, 0, 0, 1, 0, h, k, 1), nrow = 3); return(tr)}
+# rigid.transl <- function(h = 0, k = 0) {tr <-  matrix(c(1, 0, 0, 0, 1, 0, h, k, 1), nrow = 3); return(tr)}
 
 # rigid transformation allows for rotations around a specified center
-rigid.transf <- function(h = 0, k = 0, alpha = 0) {tr <- matrix(c(cos(alpha), -sin(alpha), 0, sin(alpha), cos(alpha), 0, h, k, 1), nrow = 3); return(tr)}
+# rigid.transf <- function(h = 0, k = 0, alpha = 0) {tr <- matrix(c(cos(alpha), -sin(alpha), 0, sin(alpha), cos(alpha), 0, h, k, 1), nrow = 3); return(tr)}
 
 # The rotate function centers the x/y coords at origo, applies the rotation and then transforms back the x/y 
 # coords to their original center
-rotate <- function(angle, center.cur) {
-  alpha <- 2*pi*(angle/360)
-  tr <- rigid.transl(-center.cur[1], -center.cur[2])
-  tr <- rigid.transf(center.cur[1], center.cur[2], alpha)%*%tr
-  return(tr)
-}
+# rotate <- function(angle, center.cur) {
+#   alpha <- 2*pi*(angle/360)
+#   tr <- rigid.transl(-center.cur[1], -center.cur[2])
+#   tr <- rigid.transf(center.cur[1], center.cur[2], alpha)%*%tr
+#   return(tr)
+# }
 
 # Takes a 3x3 transformation matrix and returns a mapping function
-generate.map.affine <- function (
-  tr, 
-  forward = FALSE
-) {
-  if (forward) {
-    map.affine <- function (x, y) {
-      p <- cbind(x, y)
-      xy <- t(solve(tr)%*%t(cbind(p, 1)))
-      list(x = xy[, 1], y = xy[, 2])
-    }
-  } else {
-    map.affine <- function (x, y) {
-      p <- cbind(x, y)
-      xy <- t(tr%*%t(cbind(p, 1)))
-      list(x = xy[, 1], y = xy[, 2])
-    }
-  }
-  return(map.affine)
-}
+# generate.map.affine <- function (
+#   tr, 
+#   forward = FALSE
+# ) {
+#   if (forward) {
+#     map.affine <- function (x, y) {
+#       p <- cbind(x, y)
+#       xy <- t(solve(tr)%*%t(cbind(p, 1)))
+#       list(x = xy[, 1], y = xy[, 2])
+#     }
+#   } else {
+#     map.affine <- function (x, y) {
+#       p <- cbind(x, y)
+#       xy <- t(tr%*%t(cbind(p, 1)))
+#       list(x = xy[, 1], y = xy[, 2])
+#     }
+#   }
+#   return(map.affine)
+# }
 
 # Apply rotation of 90 deg anti-clockwise around image center
 imd <- readImage(imdapi_mod)
-tr <- rotate(-90, center.cur = c(2232, 2232)) # The images were downscaled by a factor 0f 0.5 so the new image center is 4464/2, 4464/2
-map.forward <- generate.map.affine(tr, forward = T)
-xy <- as.data.frame(do.call(cbind, map.forward(x = spots$x, y = spots$y)))
+# tr <- rotate(-90, center.cur = c(2232, 2232)) # The images were downscaled by a factor 0f 0.5 so the new image center is 4464/2, 4464/2
+# map.forward <- generate.map.affine(tr, forward = T)
+# xy <- as.data.frame(do.call(cbind, map.forward(x = spots$x, y = spots$y)))
+
+xmax <- ymax <- 2000
+xy.list <- lapply(spots.list, function(xy) {
+  rs <- ((dim(imd)[2]/0.5)/2000)
+  xy <- xy*rs
+  xy$x <- xy$x + dim(imd)[1]/0.5 - 2000*rs
+  return(xy)
+})
 
 # Check transformation results
 # Now we can see that the coordinates have been transformed -90 deg
-par(mfrow = c(1, 2))
-plot(spots$x, 4464 - spots$y, xlim = c(0, 4464), ylim = c(0, 4464))
-title(main = "original spots")
-plot(xy[, 1], 4464 - xy[, 2], xlim = c(0, 4464), ylim = c(0, 4464))
-title(main = "transformed spots")
-
-# Now we just need to apply the same scaling factor that was used to downscale the 
-# DAPI image earlier when creating "dapi_edited_small_canvassize.tif"
-xy <- xy*0.5
-xy$x <- xy$x + dim(imd)[1] - 2232 # Here we need to add the height of the added canvas that was added in PS
+# par(mfrow = c(1, 2))
+# ymax <- 2000 #4464
+# xmax <- 2000
+# plot(spots$x, ymax - spots$y, xlim = c(0, xmax), ylim = c(0, ymax))
+# title(main = "original spots")
+# plot(xy[, 1], ymax - xy[, 2], xlim = c(0, xmax), ylim = c(0, ymax))
+# title(main = "transformed spots")
 
 # We can check if the transformation was correct, i.e. the spots have 
 # rotated -90deg and scaled by a factor of 0.5
-par(mfrow = c(1, 1))
-dapi_mod <- readImage(files = imdapi_mod)
-EBImage::display(dapi_mod, method = "raster")
-points(xy[, 1], xy[, 2], col = "red")
+# par(mfrow = c(1, 1))
+# dapi_mod <- readImage(files = imdapi_mod)
+# EBImage::display(dapi_mod, method = "raster")
+# points(xy[, 1]*0.5, xy[, 2]*0.5, col = "red")
 
 # Define pixel size and radius
 image.size.micron <- 8705 
-image.size.pixel <- 4464/2
+image.size.pixel <- 2000/2 # 4464/2
 pixels.per.um <- (image.size.pixel/image.size.micron)
 pixelsize <- 1/pixels.per.um # micrometer
 spot.radius <- 27.5 # micrometer
-
-# Get x/y coordinates from transformed data.frame
-x <- xy$x
-y <- xy$y
 
 # function to get polygon for spot
 circle.perimeter <- function ( 
@@ -240,7 +246,11 @@ count.spot.inside <- function (
 }
 
 # make polygon dataframe
-spots.contours <- do.call("rbind", lapply(seq_along(x), function(i){circle.perimeter(x[i], y[i], i, spot.radius, pixelsize)}))
+spots.contours.list <- lapply(xy.list, function(xy) {
+  x <- xy$x*0.5
+  y <- xy$y*0.5
+  do.call("rbind", lapply(seq_along(x), function(i){circle.perimeter(x[i], y[i], i, spot.radius, pixelsize)}))
+})
 
 #normalization function for normalizing cell counts
 normalize <- function(x){
@@ -250,42 +260,62 @@ normalize <- function(x){
 }
 
 #create a soma list object to contain the spot info in
-spotSoma <- list(x = x,
-                 y = y,
-                 intensity <- rep(100, length(x)),
-                 area = rep(pi*(spot.radius^2)*pixelsize, length(x)),
-                 contour.x = spots.contours$x,
-                 contour.y = spots.contours$y,
-                 contour.ID = spots.contours$id)
+spotSoma.list <- lapply(seq_along(spots.contours.list), function(i) {
+  spots.contours <- spots.contours.list[[i]]
+  xy <- xy.list[[i]]
+  x <- xy$x*0.5
+  y <- xy$y*0.5
+  list(x = x,
+       y = y,
+       intensity <- rep(100, length(x)),
+       area = rep(pi*(spot.radius^2)*pixelsize, length(x)),
+       contour.x = spots.contours$x,
+       contour.y = spots.contours$y,
+       contour.ID = spots.contours$id)
+})
 
 # create segmentation output list object             
-seg.Spots <- list(filter = myfilter, soma = spotSoma)
+seg.Spots.list <- lapply(spotSoma.list, function(spotSoma) {
+  list(filter = myfilter, soma = spotSoma)
+})
 
 # plot the previous registration
 quartz()
+par(mfrow=c(1, 4))
 plot.registration(regi, border = 'orange')
-# plot exact polygons from contours
-plot.polygon(spots.contours, border = "red")
+plot.polygon(spots.contours[[1]], border = "red")
+plot.registration(regi, border = 'orange')
+plot.polygon(spots.contours[[2]], border = "red")
+plot.registration(regi, border = 'orange')
+plot.polygon(spots.contours[[3]], border = "red")
+plot.registration(regi, border = 'orange')
+plot.polygon(spots.contours[[4]], border = "red")
 
 # get identity of features in atlas and in both coordinate systems
 # datasetSpots <- get.cell.ids(regi, seg.Spots, forward.warp = TRUE) #use this for no plotting and faster
 quartz()
-datasetSpots <- inspect.registration(regi, seg.Spots, forward.warps  = TRUE)
-datasetSpots$cell.count <- count.spot.inside(seg.Spots, xy)
+datasetSpots.list <- lapply(seg.Spots.list, function(seg.Spots) {
+  datasetSpots <- inspect.registration(regi, seg.Spots, forward.warps = TRUE)
+  datasetSpots$cell.count <- count.spot.inside(seg.Spots, xy)
+  return(datasetSpots)
+})
 
 #plot registration
 quartz()
 par(mfrow = c(1,3))
 plot.registration(regi, border = 'orange', draw.trans.grid =TRUE)
 # plot points with gray level intensity according to how many cells in each
-points(datasetSpots[, c("x", "y")], pch = 21, col = 'pink', bg = gray(datasetSpots$cell.count))#gray(normalize(datasetSpots$cell.count)))
-schematic.plot(datasetSpots,  mm.grid = FALSE, scale.bar = TRUE, device = FALSE)
+points(datasetSpots.list[[1]][, c("x", "y")], pch = 21, col = 'pink', bg = gray(datasetSpots.list[[1]]$cell.count))#gray(normalize(datasetSpots$cell.count)))
+schematic.plot(datasetSpots.list[[1]],  mm.grid = FALSE, scale.bar = TRUE, device = FALSE)
 #overwrite rgeion color with cell count gray scale
-datasetSpots$color <- gray(datasetSpots$cell.count)#gray(normalize(datasetSpots$cell.count))
-schematic.plot(datasetSpots,  mm.grid = FALSE, scale.bar = TRUE, device = FALSE)
+datasetSpots.list[[1]]$color <- gray(datasetSpots.list[[1]]$cell.count)#gray(normalize(datasetSpots$cell.count))
+schematic.plot(datasetSpots.list[[1]],  mm.grid = FALSE, scale.bar = TRUE, device = FALSE)
 
 #revert back
-datasetSpots$color <- color.from.acronym(datasetSpots$acronym)
+datasetSpots.list <- lapply(datasetSpots.list, function(datasetSpots) {
+  datasetSpots$color <- color.from.acronym(datasetSpots$acronym)
+  return(datasetSpots)
+})
 
 # make webmap
 # Ludvig:
@@ -295,7 +325,8 @@ save.image()
 
 
 # Add info to st.object meta.data
-gg <- subset(st.object@meta.data, sample == "1")
+gg <- st.object@meta.data
+datasetSpots <- do.call(rbind, datasetSpots.list)
 gg$acronym <- datasetSpots$acronym
 gg$color <- datasetSpots$color
 gg$color <- ifelse(is.na(gg$color), "white", gg$color)
@@ -305,11 +336,10 @@ library(dplyr)
 gg %>% group_by(acronym) %>% summarize(mx = median(warped_x), my = median(warped_y))
 
 # Plot results
-ggplot(gg, aes(warped_x, warped_y)) +
+ggplot(gg, aes(warped_x, 2000 - warped_y)) +
   geom_point(fill = gg$color, shape = 21, size = 2, stroke = 0.2) +
-  coord_flip() +
-  theme_void() 
-
+  theme_void() +
+  facet_wrap(~sample)
 
 
 # Plot outlined reference
@@ -338,7 +368,6 @@ plot.registration.only <- function (
               border = border)
     })
   }
-  
 }
 
 
