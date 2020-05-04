@@ -684,7 +684,7 @@ plot(st.object, col = "red", cex = 0.2)
 
 Now that we have generated pretty decent masks for each tissue section, we can apply the alignment algorithm to find a transformation function. We will use section 1 as target for the alignment.
 
-```{r alignment, fig.width=12, fig.height=12}
+```{r alignment, fig.width=7, fig.height=6}
 
 st.object.v9tov12 <- AlignImages(st.object.v9tov12, reference.index = 1)
 plot(st.object.v9tov12, col = "#00000000")
@@ -699,6 +699,8 @@ plot(st.object.v13tov16.rotated, col = "#00000000")
 
 saveRDS(st.object.v13tov16.rotated, file = "R_objects/st.object.v13tov16.rotated")
 saveRDS(st.object.v9tov12, file = "R_objects/st.object.st.object.v9tov12")
+
+ggplot(st.object.v13tov16.rotated@meta.data, aes(warped_x, 2000 - warped_y, color = sample)) + geom_point(alpha = 0.7, size = 0.8) + theme_void()
 
 ```
 
@@ -924,12 +926,12 @@ saveRDS(segmented.egfp.list, file = "R_objects/segmented.egfp.list")
 ```{r plot_clones}
 
 # Load st.object for v9-v12
-st.object.v9tov12 <- readRDS(file = "R_objects/st.object.st.object.v9tov12")
+st.object.v9tov12 <- readRDS(file = "../R_objects/st.object.st.object.v9tov12")
 ids <- c("V9", "V10", "V11", "V12")
 rownames(st.object.v9tov12@meta.data) <- paste0(ids[st.object.v9tov12@meta.data$sample %>% as.numeric()], "_", 
                                                          gsub(pattern = "_[1-4]$", replacement = "", x = st.object.v9tov12@meta.data$barcode))
 # Load st.object for v13-v16
-st.object.v13tov16.rotated <- readRDS(file = "R_objects/st.object.v13tov16.rotated")
+st.object.v13tov16.rotated <- readRDS(file = "../R_objects/st.object.v13tov16.rotated")
 ids <- c("V13", "V14", "V15", "V16")
 rownames(st.object.v13tov16.rotated@meta.data) <- paste0(ids[st.object.v13tov16.rotated@meta.data$sample %>% as.numeric()], "_", 
                                                          gsub(pattern = "_[1-4]$", replacement = "", x = st.object.v13tov16.rotated@meta.data$barcode))
@@ -1006,6 +1008,7 @@ PlotFeatures <- function (
   # Structure data
   gg[, feature] <- object@meta.data[rownames(gg), feature]
   if (!is.null(group.by)) {
+    if (!group.by %in% colnames(object@meta.data)) stop(paste0("column '", group.by, "' is not present in the Seurat object meta data"))
     gg[, group.by] <- object@meta.data[rownames(gg), group.by]
   }
   imdims <- st.object@dims[[1]][2:3] %>% as.numeric()
@@ -1014,6 +1017,7 @@ PlotFeatures <- function (
   # Select coloring but only if one clone is selected. If multiple clones are selected we have to color them 
   # by clone to distunguish them. If one clone is selected we can instead color them by another reference
   if (!is.null(group.by) & !is.null(color.by)) {
+    if (!color.by %in% colnames(object@meta.data)) stop(paste0("column '", color.by, "' is not present in the Seurat object meta data"))
     if (length(selected.clones) > 1) stop("Only one clone can be selected when using a group variable")
     region.colors <- sapply(1:nrow(object), function(i) {
       setNames(object@meta.data[i, color.by], object@meta.data[i, group.by])
@@ -1029,6 +1033,8 @@ PlotFeatures <- function (
       hcl(h = hues, l = 65, c = 100)[1:n]
     }
     region.colors <- setNames(region.colors, gg_color_hue(length(region.colors)))
+  } else {
+    region.colors <- NULL
   }
   
   # Shuffle positions
@@ -1049,11 +1055,17 @@ PlotFeatures <- function (
     p <- p +
       geom_point(data = gg, aes_string("warped_x", "imdims[2] - warped_y", fill = feature), shape = 21, size = pt.size, alpha = pt.alpha)
   }
-    p <- p + 
-    theme_void() +
-    scale_x_continuous(limits = c(0, imdims[1]), expand = c(0, 0)) +
-    scale_y_continuous(limits = c(0, imdims[2]), expand = c(0, 0))
-    return(p)
+  
+  if (!is.null(region.colors)) {
+    p <- p +
+      scale_fill_manual(values = region.colors)
+  }
+    
+  p <- p + 
+  theme_void() +
+  scale_x_continuous(limits = c(0, imdims[1]), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, imdims[2]), expand = c(0, 0))
+  return(p)
 }
 
 # Plot all clones
