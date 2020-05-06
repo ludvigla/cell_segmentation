@@ -297,7 +297,7 @@ quartz()
 datasetSpots.list <- lapply(seq_along(seg.Spots.list), function(i) {
   seg.Spots <- seg.Spots.list[[i]]
   datasetSpots <- inspect.registration(regi, seg.Spots, forward.warps = TRUE)
-  xy <- xy.list[[i]]
+  xy <- xy.list[[i]]*0.5
   datasetSpots$cell.count <- count.spot.inside(seg.Spots, xy)
   return(datasetSpots)
 })

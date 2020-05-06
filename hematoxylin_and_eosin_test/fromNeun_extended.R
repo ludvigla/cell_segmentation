@@ -19,12 +19,12 @@ coord <- -1.65
 #   image without any rotations or scaling, I decided to do this from R instead. I just think
 #   it's easier to keep track of whatever transformations were applied so that I can apply the same
 #   for the spots later.
-imneun <- image_read("images/Neun_edited_extended.tif")
+imneun <- image_read("images/Neun_new.tif")
 
 # Ludvig: 
 #   Here I have rescaled the edited dapi tif image to 50% and rotated it by 90deg anti-clockwise
 imneun <- image_scale(imneun, paste0(image_info(imneun)$width*0.5)) #%>% image_rotate(degrees = -90)
-image_write(imneun, path = "images/Neun_edited_extended_small_canvassize.tif")
+image_write(imneun, path = "images/Neun_new_small_canvassize.tif")
 
 # this is the filter we used it is a list object with the following parameters.
 # Ludvig: 
@@ -44,7 +44,7 @@ myfilter <- list(alim = c(1, 50), #area limits for what to consider as cell bodi
 # segmentation
 # Ludvig: 
 #   segmentation looks aweful, but not sure if it matters now.
-imneun_mod <- "images/Neun_edited_extended_small_canvassize.tif"
+imneun_mod <- "images/Neun_new_small_canvassize.tif"
 quartz()
 seg <- segment(imneun_mod, filter = myfilter, display = TRUE)
 
@@ -61,8 +61,6 @@ plot(seg$soma, pch = 16, cex = 0.25, asp = 1,
 
 
 # run first pass at rgeistration
-# Ludvig: 
-#   I'm super confused by the resize parameter, but it seems to work with 0.4 :-/
 quartz()
 regi <- registration(imneun_mod, filter = myfilter, coordinate = coord)
 
@@ -89,7 +87,7 @@ regi <- registration(imneun_mod, filter = myfilter, coordinate = coord)
 # saveRDS(regi$correspondance, file = "correspondance.points.extended")
 
 # Save registration
-saveRDS(object = regi, file = "../R_objects/registration_HE_V9")
+saveRDS(object = regi, file = "../R_objects/registration_Neun_V9")
 
 
 # dataset with all the cells registered.
@@ -120,7 +118,7 @@ quartz.save('cells_in_atlas_extended.png', type='png')
 # read cells pixel coordinates form external file
 # cells <- read.table('cell_pixel_centroids.csv', sep=',', header =TRUE)
 # get from dataset revious segmentation dataset here instead
-st.object <- readRDS("../R_objects/st.object.st.object.v9tov12")
+st.object <- readRDS("../R_objects/st.object.v13tov16.rotated")
 
 # Select sample
 # Now we should be able to select any of the V9-V12 samples (here called 1-4) since they are alreasdy aligned
@@ -132,24 +130,24 @@ spots.list <- lapply(1:4, function(s) {
 # First we need to define a couple of tranformation functions:
 
 # rigid translation allows for shifts along x/y axes
-# rigid.transl <- function(h = 0, k = 0) {tr <-  matrix(c(1, 0, 0, 0, 1, 0, h, k, 1), nrow = 3); return(tr)}
+#rigid.transl <- function(h = 0, k = 0) {tr <-  matrix(c(1, 0, 0, 0, 1, 0, h, k, 1), nrow = 3); return(tr)}
 
 # rigid transformation allows for rotations around a specified center
-# rigid.transf <- function(h = 0, k = 0, alpha = 0) {tr <- matrix(c(cos(alpha), -sin(alpha), 0, sin(alpha), cos(alpha), 0, h, k, 1), nrow = 3); return(tr)}
+#rigid.transf <- function(h = 0, k = 0, alpha = 0) {tr <- matrix(c(cos(alpha), -sin(alpha), 0, sin(alpha), cos(alpha), 0, h, k, 1), nrow = 3); return(tr)}
 
 # The rotate function centers the x/y coords at origo, applies the rotation and then transforms back the x/y 
 # coords to their original center
-# rotate <- function(angle, center.cur) {
-#   alpha <- 2*pi*(angle/360)
-#   tr <- rigid.transl(-center.cur[1], -center.cur[2])
-#   tr <- rigid.transf(center.cur[1], center.cur[2], alpha)%*%tr
-#   return(tr)
-# }
+#rotate <- function(angle, center.cur) {
+#  alpha <- 2*pi*(angle/360)
+#  tr <- rigid.transl(-center.cur[1], -center.cur[2])
+#  tr <- rigid.transf(center.cur[1], center.cur[2], alpha)%*%tr
+#  return(tr)
+#}
 
 # Takes a 3x3 transformation matrix and returns a mapping function
 # generate.map.affine <- function (
-#   tr, 
-#   forward = FALSE
+#  tr, 
+#  forward = FALSE
 # ) {
 #   if (forward) {
 #     map.affine <- function (x, y) {
@@ -168,16 +166,18 @@ spots.list <- lapply(1:4, function(s) {
 # }
 
 # Apply rotation of 90 deg anti-clockwise around image center
-imd <- readImage(imneun_mod)
-# tr <- rotate(-90, center.cur = c(2232, 2232)) # The images were downscaled by a factor 0f 0.5 so the new image center is 4464/2, 4464/2
-# map.forward <- generate.map.affine(tr, forward = T)
-# xy <- as.data.frame(do.call(cbind, map.forward(x = spots$x, y = spots$y)))
+ima <- magick::image_read("images/Neun_raw.tif") %>% magick::image_rotate(-90) %>% imager::magick2cimg()
+imd <- magick::image_read(imneun_mod) %>% imager::magick2cimg()
+#tr <- rotate(-90, center.cur = c(2232, 2232)) # The images were downscaled by a factor 0f 0.5 so the new image center is 4464/2, 4464/2
+#map.forward <- generate.map.affine(tr, forward = T)
+#xy <- as.data.frame(do.call(cbind, map.forward(x = spots$x, y = spots$y)))
 
-xmax <- ymax <- 2000
+xmax <- dim(ima)[2]
+ymax <- dim(ima)[1]
 xy.list <- lapply(spots.list, function(xy) {
-  rs <- ((dim(imd)[2]/0.5)/2000)
+  rs <- ((dim(imd)[2]/0.5)/xmax)
   xy <- xy*rs
-  xy$x <- xy$x + dim(imd)[1]/0.5 - 2000*rs
+  xy$x <- xy$x + dim(imd)[1]/0.5 - xmax*rs
   return(xy)
 })
 
@@ -200,7 +200,7 @@ xy.list <- lapply(spots.list, function(xy) {
 
 # Define pixel size and radius
 image.size.micron <- 8705 
-image.size.pixel <- 2000/2 # 4464/2
+image.size.pixel <- 4464/2
 pixels.per.um <- (image.size.pixel/image.size.micron)
 pixelsize <- 1/pixels.per.um # micrometer
 spot.radius <- 27.5 # micrometer
@@ -283,18 +283,20 @@ seg.Spots.list <- lapply(spotSoma.list, function(spotSoma) {
 quartz()
 par(mfrow=c(1, 4))
 plot.registration(regi, border = 'orange')
-plot.polygon(spots.contours[[1]], border = "red")
+plot.polygon(spots.contours.list[[1]], border = "red")
 plot.registration(regi, border = 'orange')
-plot.polygon(spots.contours[[2]], border = "red")
+plot.polygon(spots.contours.list[[2]], border = "red")
 plot.registration(regi, border = 'orange')
-plot.polygon(spots.contours[[3]], border = "red")
+plot.polygon(spots.contours.list[[3]], border = "red")
 plot.registration(regi, border = 'orange')
-plot.polygon(spots.contours[[4]], border = "red")
+plot.polygon(spots.contours.list[[4]], border = "red")
 
 # get identity of features in atlas and in both coordinate systems
 # datasetSpots <- get.cell.ids(regi, seg.Spots, forward.warp = TRUE) #use this for no plotting and faster
 quartz()
-datasetSpots.list <- lapply(seg.Spots.list, function(seg.Spots) {
+datasetSpots.list <- lapply(seq_along(seg.Spots.list), function(i) {
+  seg.Spots <- seg.Spots.list[[i]] 
+  xy <- xy.list[[i]]*0.5
   datasetSpots <- inspect.registration(regi, seg.Spots, forward.warps = TRUE)
   datasetSpots$cell.count <- count.spot.inside(seg.Spots, xy)
   return(datasetSpots)
