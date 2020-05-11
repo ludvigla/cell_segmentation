@@ -15,179 +15,14 @@ library(magrittr)
 library(zeallot)
 library(dplyr)
 library(plotly)
+
 ```
 
-# Define functions
+# Load functions
 ***
 
 ```{r define_functions}
-# Define filter function for later
-filter_cells <- function(im, brush.size = 9, verbose = FALSE) {
-  if (verbose) cat("Applying 2D convolution filter to image ... \n")
-  f = makeBrush(brush.size, shape = 'disc', step = FALSE)
-  f = f/sum(f)
-  imfiltered <- filter2(im, filter = f)
-  return(imfiltered)
-}
-
-
-# Define correction function for later
-correct_cells <- function(im, imfiltered, verbose = FALSE) {
-  if (class(im) != "Image") stop(paste0("Invalid input format of im: ", class(im)))
-  if (class(imfiltered) != "Image") stop(paste0("Invalid input format of imfiltered: ", class(imfiltered)))
-  if (verbose) cat("Correcting image ... \n")
-  imcorrected <- (im - imfiltered) %>% normalize()
-  return(imcorrected)
-}
-
-# Define threshold function for later
-threshold_cells <- function(imcorrected, nsd = 2, verbose = FALSE) {
-  if (class(imcorrected) != "Image") stop(paste0("Invalid input format: ", class(imcorrected)))
-  if (verbose) cat("Thresholding cells ... \n")
-  thr <- mean(imcorrected) + nsd*sd(imcorrected)
-  imthreshold <- imcorrected > thr
-  return(imthreshold)
-}
-
-# Define cleaning function for later
-clean_cells <- function(imthreshold, ftr = "s.area", thr = c(5, 40), do.fast = FALSE, verbose = FALSE) {
-  if (class(imthreshold) != "Image") stop(paste0("Invalid input format: ", class(imthreshold)))
-  if (verbose) cat("Cleaning up unwanted speckles ... \n")
-  imthreshold <- bwlabel(imthreshold)
-  if (do.fast & ftr == "s.area") {
-    areas <- table(imthreshold)[-1]
-    inds <- which(areas < thr[1] | areas > thr[2])
-  } else if (do.fast & ftr != "s.area") (
-    stop(paste0("Invalid option ", ftr, " for ftr. Only ftr = 's.area' can be used for fast shape extraction."))
-  ) else {
-    fts.shape <- shape_extractor(x = imthreshold)
-    stopifnot(ftr %in% colnames(fts.shape))
-    inds <- which(fts.shape[, ftr] <= thr)
-  }
-  imclean <- rmObjects(x = imthreshold, index = inds)
-  return(imclean)
-}
-
-# Define watershed function for later
-watershed_cells <- function(imclean, tol = 0.1, verbose = FALSE) {
-  if (class(imclean) != "Image") stop(paste0("Invalid input format: ", class(imclean)))
-  if (verbose) cat("Applying watershed ... \n")
-  imwatershed <- watershed(x = EBImage::distmap(imclean), tolerance = tol)
-  return(imwatershed)
-}
-
-# Now we have a pretty decent workflow for segmenting cells so let’s combine the 5 steps into one function.
-SegmentCells <- function(
-  impath,
-  crop.window = NULL,
-  brush.size = 9,
-  nsd = 2,
-  feature = "s.area",
-  feature.threshold = c(5, 40),
-  do.fast = FALSE,
-  tolerance = 0.1,
-  return.all = FALSE,
-  verbose = FALSE
-) {
-  if (!file.exists(impath)) stop(paste0("File ", impath, " does not exist \n"))
-  cells <- readImage(impath)
-  cells <- EBImage::normalize(cells)
-  
-  if (!is.null(crop.window)) {
-    if (!length(crop.window) == 4 & class(crop.window) %in% c("numeric", "integer")) stop("Invalid crop window \n")
-    cells <- cells[crop.window[1]:crop.window[2], crop.window[3]:crop.window[4]]
-  }
-  
-  cells_filtered <- filter_cells(cells, brush.size, verbose) # 1. filter 
-  cells_corrected <- correct_cells(cells, cells_filtered, verbose) # 2. correct 
-  cells_th <- threshold_cells(cells_corrected, nsd, verbose) # 3. threshold
-  cells_clean <- clean_cells(cells_th, feature, feature.threshold, do.fast, verbose) # 4. clean
-  #cells_colored <- paintObjects(cells_clean, cells, col = "#FFA500")
-  #display(cells_colored)
-  cells_split <- watershed_cells(cells_clean, tolerance, verbose) # 5. watershed
-  
-  if (return.all) {
-    return(list(cells, cells_filtered, cells_corrected, cells_clean, cells_split))
-  } else {
-    return(cells_split)
-  }
-}
-
-# Define overlap function
-# select cells based on an overlap criteria to make sure that shapes that are split into multiple new shapes are not all included in the output
-# Only the shape with the highest overlap is kept and the overlap also have to be above a specified threshold (e.g. 50%)
-# The overlap between two shapes is defined as the area of the intersect divided by the area of the smallest shape.
-# for cells with multiple overlaps, keep only the top hit
-# for each pair of overlapping shapes A and B, estimate the overlap as intersect(A, B)/min(A, B)
-# return cells with an overlap of at least 50%
-
-overlap_fkn <- function(x, y, i) {
-  return(i/pmin(x, y))
-}
-
-OverlapImages <- function(
-  ima, 
-  imb, 
-  overlap.min = 0.5, 
-  return.merged = FALSE, 
-  return.indices = FALSE, 
-  verbose = FALSE
-) {
-  
-  if (length(dim(ima)) == 3 | length(dim(imb)) == 3) {
-    stop("Invalid dims for ima or imb")
-  }
-  if (length(table(ima)) <= 2) stop("ima has not been labeled")
-  if (length(table(imb)) <= 2) stop("imb has not been labeled")
-  # Summarize overlap across images
-  if (verbose) cat(paste0("Calculating intersect between images \n"))
-  d <- data.frame(a = as.numeric(ima), b = as.numeric(imb))
-  d <- table(d) %>% as.matrix()
-  d <- d[-1, -1]
-  
-  # Extract area for image a and image b
-  area_a <- table(ima)[-1]
-  aa <- setNames(as.numeric(area_a), names(area_a))
-  area_b <- table(imb)[-1]
-  ab <- setNames(as.numeric(area_b), names(area_b))
-  if (verbose) cat(paste0("Finished calculating intersect between ", length(area_a), " shapes in image a and ", length(area_b), " shapes in image b \n"))
-  
-  # Collect indices for overlaping shapes
-  intersect_ab <- which(d > 0, arr.ind = T)
-  indices <- setNames(data.frame(apply(do.call(rbind, (lapply(1:nrow(intersect_ab), function(i) {
-    inds <- intersect_ab[i, ]
-    c(rownames(d)[inds[1]], colnames(d)[inds[2]], d[inds[1], inds[2]])
-  }))), 2, function(x) as.character(x)), stringsAsFactors = F), nm = c("ind.a", "ind.b", "intersect"))
-  
-  # Collect shape areas, indices and intersect
-  df <- data.frame(area.a = aa[indices$ind.a], area.b = ab[indices$ind.b], 
-                   inda = as.integer(indices$ind.a), indb = as.integer(indices$ind.b), 
-                   intersect = as.numeric(indices$intersect), stringsAsFactors = F)
-  
-  # Calculate overlap
-  if (verbose) cat(paste0("Calculating overlap between images using shape intersect \n"))
-  df$overlap <- overlap_fkn(x = df$area.a, y = df$area.b, i = df$intersect)
-  df$keep <- df$overlap > overlap.min
-  df <- subset(df, keep)
-  
-  # Clean up image a and image b
-  ima_clean <- rmObjects(ima, index = setdiff(as.integer(names(table(ima)[-1])), df$inda))
-  imb_clean <- rmObjects(imb, index = setdiff(as.integer(names(table(imb)[-1])), df$indb))
-  
-  # Should the clean images be merged?
-  if (return.merged) {
-    imres <- ima_clean | imb_clean
-  } else {
-    imres <- ima_clean & imb_clean
-  }
-  
-  # return extra data
-  if (return.indices) {
-    return(list(bwlabel(imres), df))
-  } else {
-    return(bwlabel(imres))
-  }
-}
+source("../scripts/global_functions.R")
 ```
 
 # Segmentation workflow
@@ -198,10 +33,10 @@ Apply previoulsy established segmentation workflow to uncropped and raw TIF imag
 
 # list input files
 img.files.list <- list(
-  v13 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V13", recursive = T, full.names = T),
-  v14 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V14", recursive = T, full.names = T),
-  v15 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V15", recursive = T, full.names = T),
-  v16 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "data/V16", recursive = T, full.names = T)
+  v13 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "../data/IF/V13", recursive = T, full.names = T),
+  v14 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "../data/IF/V14", recursive = T, full.names = T),
+  v15 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "../data/IF/V15", recursive = T, full.names = T),
+  v16 = list.files(pattern = "olig2.tif|neun.tif|egfp.tif", path = "../data/IF/V16", recursive = T, full.names = T)
 )
 
 # define feature threshold ranges
@@ -234,6 +69,9 @@ for (s in names(img.files.list)) {
 ## Count detected nuclei
 ***
 
+```{r read_segmented, eval=FALSE, include=FALSE}
+segmented.list <- readRDS("../R_objects/segmented.list")
+```
 ```{r count_features}
 
 for (s in names(segmented.list)) {
@@ -334,15 +172,15 @@ for (s in names(segmented.egfp.list)) {
 ```
 
 We can now extract the feature coordinates and labels to have a data.frame format that is a bit easier to work with. Each data.frame contains the x/y coordinates for a celltype and the sample column defines the sectioning order which we can use to set a z axis value.
-
+```{r read_segmented_egfp, eval=FALSE, include=FALSE}
+segmented.egfp.list <- readRDS("../R_objects/segmented.egfp.list")
+```
 ```{r pot_celltypes, fig.width=14, fig.height=12}
 
 df.neurons <- data.frame()
 df.oligo <- data.frame()
 df.oligo_neurons <- data.frame()
 df.unknown <- data.frame()
-
-segmented.egfp.list <- readRDS("../R_objects/segmented.egfp.list")
 
 for (i in seq_along(segmented.egfp.list)) {
   c(oligodendrocytes, neurons, oligodendrocytes_neurons, unknown) %<-% segmented.egfp.list[[i]]
@@ -371,37 +209,38 @@ NOTE that I have included all 8 sections here, but only sections v13-v16 will be
 ```{r load_spots}
 
 # Read spot coordinates
-positions.files <- c("data/spaceranger/V9/spatial/tissue_positions_list.csv",
-                     "data/spaceranger/V10/spatial/tissue_positions_list.csv",
-                     "data/spaceranger/V11/spatial/tissue_positions_list.csv",
-                     "data/spaceranger/V12/spatial/tissue_positions_list.csv",
-                     "data/spaceranger/V13/spatial/tissue_positions_list.csv",
-                     "data/spaceranger/V14/spatial/tissue_positions_list.csv",
-                     "data/spaceranger/V15/spatial/tissue_positions_list.csv",
-                     "data/spaceranger/V16/spatial/tissue_positions_list.csv")
+positions.files <- c("../data/spaceranger/V9/spatial/tissue_positions_list.csv",
+                     "../data/spaceranger/V10/spatial/tissue_positions_list.csv",
+                     "../data/spaceranger/V11/spatial/tissue_positions_list.csv",
+                     "../data/spaceranger/V12/spatial/tissue_positions_list.csv",
+                     "../data/spaceranger/V13/spatial/tissue_positions_list.csv",
+                     "../data/spaceranger/V14/spatial/tissue_positions_list.csv",
+                     "../data/spaceranger/V15/spatial/tissue_positions_list.csv",
+                     "../data/spaceranger/V16/spatial/tissue_positions_list.csv")
 
 spots <- lapply(positions.files, function(positions) {
   setNames(read.table(positions, header = F, sep = ","), c("barcode", "selection", "y", "x", "pixel_y", "pixel_x"))
 })
 
 # Read json file containing scaling factors
-scalefactors.files <- c("data/spaceranger/V9/spatial/scalefactors_json.json",
-                        "data/spaceranger/V10/spatial/scalefactors_json.json",
-                        "data/spaceranger/V11/spatial/scalefactors_json.json",
-                        "data/spaceranger/V12/spatial/scalefactors_json.json",
-                        "data/spaceranger/V13/spatial/scalefactors_json.json",
-                        "data/spaceranger/V14/spatial/scalefactors_json.json",
-                        "data/spaceranger/V15/spatial/scalefactors_json.json",
-                        "data/spaceranger/V16/spatial/scalefactors_json.json")
+scalefactors.files <- c("../data/spaceranger/V9/spatial/scalefactors_json.json",
+                        "../data/spaceranger/V10/spatial/scalefactors_json.json",
+                        "../data/spaceranger/V11/spatial/scalefactors_json.json",
+                        "../data/spaceranger/V12/spatial/scalefactors_json.json",
+                        "../data/spaceranger/V13/spatial/scalefactors_json.json",
+                        "../data/spaceranger/V14/spatial/scalefactors_json.json",
+                        "../data/spaceranger/V15/spatial/scalefactors_json.json",
+                        "../data/spaceranger/V16/spatial/scalefactors_json.json")
 
+ids <- c("V9", "V10", "V11", "V12", "V13", "V14", "V15", "V16")
 spots <- setNames(lapply(seq_along(spots), function(i) {
   x <- spots[[i]]
   scaleVisium <- jsonlite::read_json(scalefactors.files[i])
   x[, c("pixel_x", "pixel_y")] <- x[, c("pixel_x", "pixel_y")]*scaleVisium$tissue_hires_scalef
   x <- subset(x, selection == 1)
-  x$barcode <- paste0(x$barcode, "_", i) # Add section label
+  x$barcode <- paste0(ids[i], "_", x$barcode) # Add section label
   return(x)
-}), nm = c("v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16"))
+}), nm = ids)
 
 # Get pixels per micron from known image size and number of pixels
 image.size.micron <- 8705 
@@ -514,11 +353,12 @@ meta.data.v9tov12 <- do.call(rbind, lapply(seq_along(spotfiles[1:4]), function(i
   alignment$pixel_x <- alignment$pixel_x*sf
   alignment$pixel_y <- alignment$pixel_y*sf
   alignment <- subset(alignment, selection == 1)
-  alignment$barcode <- paste0(alignment$barcode, "_", i) # Add unique section label
+  #alignment$barcode <- paste0(alignment$barcode, "_", i) # Add unique section label
+  alignment$barcode <- paste0(ids[i], "_", alignment$barcode)
   alignment <- data.frame(x = alignment$x, y = alignment$y, adj_x = alignment$x, adj_y = alignment$y,
                           pixel_x = alignment$pixel_x, pixel_y = alignment$pixel_y, barcode = alignment$barcode,
                           sample = paste0(i), stringsAsFactors = FALSE)
-  rownames(alignment) <- paste0(alignment$x, "x", alignment$y, "_", i)
+  rownames(alignment) <- alignment$barcode
   return(alignment)
 }))
 
@@ -531,11 +371,11 @@ meta.data.v13tov16 <- do.call(rbind, lapply(seq_along(spotfiles[5:8]), function(
   alignment$pixel_x <- alignment$pixel_x*sf
   alignment$pixel_y <- alignment$pixel_y*sf
   alignment <- subset(alignment, selection == 1)
-  alignment$barcode <- paste0(alignment$barcode, "_", i) # Add unique section label
+  alignment$barcode <- paste0(ids[i], "_", alignment$barcode)
   alignment <- data.frame(x = alignment$x, y = alignment$y, adj_x = alignment$x, adj_y = alignment$y,
                           pixel_x = alignment$pixel_x, pixel_y = alignment$pixel_y, barcode = alignment$barcode,
                           sample = paste0(i), stringsAsFactors = FALSE)
-  rownames(alignment) <- paste0(alignment$x, "x", alignment$y, "_", i)
+  rownames(alignment) <- alignment$barcode
   return(alignment)
 }))
 
@@ -597,7 +437,6 @@ slic <- function (im, nS, compactness = 1) {
   return(sp)
 }
 
-
 # Run SLIC algorithm on an example image
 im <- imager::load.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/Aster_Tataricus.JPG/1024px-Aster_Tataricus.JPG")
 out <- slic(im, 600)
@@ -625,6 +464,8 @@ plot(st.object.v9tov12, col="#00000000")
 
 ### Mask images for v13-v16
 
+Here I haved defined a custom masking function that can be applied to the Neun images. 
+
 ```{r masking, fig.width=12, fig.height=12}
 
 # Define mask function
@@ -647,7 +488,7 @@ plot(st.object.v13tov16, col="#00000000")
 
 ### Merge st.objects (optional)
 
-Now we can combine these two objects into one st.object. This is a bit overcomplicated when working with a Staffli object, but it's relatively straightforward to run in STUtility on a Seurat object.
+Now we can combine these two objects into one st.object. This is a bit overcomplicated when working with a Staffli object, but it's relatively straightforward to run in STUtility if you are using a Seurat object.
 
 ```{r merge_st_objects}
 
@@ -686,19 +527,34 @@ Now that we have generated pretty decent masks for each tissue section, we can a
 
 ```{r alignment, fig.width=7, fig.height=6}
 
+# Run automatic alignment on HE images
 st.object.v9tov12 <- AlignImages(st.object.v9tov12, reference.index = 1)
 plot(st.object.v9tov12, col = "#00000000")
 
+# Run manual alignment on Neun images
 st.object.v13tov16 <- ManualAlignImages(st.object.v13tov16, reference.index = 1)
+plot(st.object.v13tov16, col = "#00000000")
+
+```
+
+Next, we want to rotate the image 90deg anti-clockwise to keep them up straight. Processing of images can only be done on masked images with STUtility, so if we want to rotate the processed images we need to replace the masked images with our aligned images. I have also exported the "Staffli" objects to be used for registration with wholebrain.
+
+```{r rotate, fig.height=6, fig.width=7}
+
 st.object.v13tov16.rotated <- st.object.v13tov16
 st.object.v13tov16.rotated@meta.data[, c("pixel_x", "pixel_y")] <- st.object.v13tov16.rotated@meta.data[, c("warped_x", "warped_y")]
 st.object.v13tov16.rotated@rasterlists$masked <- st.object.v13tov16.rotated@rasterlists$processed
 st.object.v13tov16.rotated@rasterlists$masked.masks <- st.object.v13tov16.rotated@rasterlists$processed.masks
-st.object.v13tov16.rotated <- WarpImages(st.object.v13tov16.rotated, transforms = list("1" = list("angle" = 90), "2" = list("angle" = 90), "3" = list("angle" = 90), "4" = list("angle" = 90)))
+st.object.v13tov16.rotated <- WarpImages(st.object.v13tov16.rotated, 
+                                         transforms = list("1" = list("angle" = -90), 
+                                                           "2" = list("angle" = -90), 
+                                                           "3" = list("angle" = -90), 
+                                                           "4" = list("angle" = -90)))
+
 plot(st.object.v13tov16.rotated, col = "#00000000")
 
-saveRDS(st.object.v13tov16.rotated, file = "R_objects/st.object.v13tov16.rotated")
-saveRDS(st.object.v9tov12, file = "R_objects/st.object.st.object.v9tov12")
+saveRDS(st.object.v13tov16.rotated, file = "../R_objects/st.object.v13tov16.rotated")
+saveRDS(st.object.v9tov12, file = "../R_objects/st.object.st.object.v9tov12")
 
 ggplot(st.object.v13tov16.rotated@meta.data, aes(warped_x, 2000 - warped_y, color = sample)) + geom_point(alpha = 0.7, size = 0.8) + theme_void()
 
@@ -707,6 +563,13 @@ ggplot(st.object.v13tov16.rotated@meta.data, aes(warped_x, 2000 - warped_y, colo
 ## Warped coordinates
 ***
 
+Now we can check how well aligned the datasets are in V9-V12 and V13-V16. Keep in mind that the it's only the right and bottom parts of the section that should be aligned when looking at the spots. Some spots in the left and top parts do not align very well, but this is just because the tissue falls outside the capture area.
+
+```{r read_st_objects}
+library(STutility)
+st.object.v13tov16.rotated <- readRDS(file = "../R_objects/st.object.v13tov16.rotated")
+st.object.st.object.v9tov12 <- readRDS(file = "../R_objects/st.object.st.object.v9tov12")
+```
 ```{r plot_warped_coords, fig.height=6, fig.width=12}
 
 p1 <- ggplot(st.object.v9tov12@meta.data, aes(warped_x, 2e3 - warped_y, color = sample)) +
@@ -884,11 +747,11 @@ all.cells <- do.call(rbind, res.list)
 With this data.frame we can for example summarize the number of neighboring cells for each spot. 4 barcodes have been duplicated here, probably due to the fact that they have been assigned both an "unknown" label and an "oligo_neurons" label. We can just subset the data.frame to exclude these if we want to.
 
 ```{r get_cells_per_spots}
-
+library(dplyr)
 # Alt.1 : count all neighboring cells
 summarized.cells <- all.cells %>% 
   group_by(barcode, celltype) %>% # Group data.frame by celltype and barcode
-  summarize(celltype_f = n()) %>% # summarize for each celltype/barcode group the number of detected cells
+  dplyr::summarize(celltype_f = dplyr::n()) %>% # summarize for each celltype/barcode group the number of detected cells
   group_by(barcode) %>% # regroup data.frame by barcode only
   arrange(-celltype_f) %>% # Arrange each group by distances, from shortest to longest
   reshape2::dcast(formula = barcode ~ celltype, value.var = "celltype_f") # recast results into a wide format to keep 1 column per celltype
@@ -914,8 +777,8 @@ plot_ly(subset(all.cells, !celltype %in% "unknown"), x = ~pixel_x_nuclei, y = ~p
 
 ```{r save_objects}
 
-saveRDS(segmented.list, file = "R_objects/segmented.list")
-saveRDS(segmented.egfp.list, file = "R_objects/segmented.egfp.list")
+saveRDS(segmented.list, file = "../R_objects/segmented.list")
+saveRDS(segmented.egfp.list, file = "../R_objects/segmented.egfp.list")
 
 ```
 
@@ -925,53 +788,42 @@ saveRDS(segmented.egfp.list, file = "R_objects/segmented.egfp.list")
 
 ```{r plot_clones}
 
-# Load st.object for v9-v12
-st.object.v9tov12 <- readRDS(file = "../R_objects/st.object.st.object.v9tov12")
-ids <- c("V9", "V10", "V11", "V12")
-rownames(st.object.v9tov12@meta.data) <- paste0(ids[st.object.v9tov12@meta.data$sample %>% as.numeric()], "_", 
-                                                         gsub(pattern = "_[1-4]$", replacement = "", x = st.object.v9tov12@meta.data$barcode))
-# Load st.object for v13-v16
-st.object.v13tov16.rotated <- readRDS(file = "../R_objects/st.object.v13tov16.rotated")
-ids <- c("V13", "V14", "V15", "V16")
-rownames(st.object.v13tov16.rotated@meta.data) <- paste0(ids[st.object.v13tov16.rotated@meta.data$sample %>% as.numeric()], "_", 
-                                                         gsub(pattern = "_[1-4]$", replacement = "", x = st.object.v13tov16.rotated@meta.data$barcode))
-
 # Load Seurat object
-brain.merge <- readRDS("../data/merged.Rds")
-brain.merge
+load("../data/merged.Rds")
 
-# Export aligned HE image reference (section 1 from st.object.v9tov12.rotated)
-library(magick)
-lims <- st.object.v9tov12@dims[[1]][2:3] %>% as.numeric()
-imr <- image_read(st.object.v9tov12@rasterlists$processed$`1`) %>% 
-  image_scale(paste0(lims[1])) %>% 
-  as.raster()
-jpeg(filename = "results/reference_images/HE_aligned.jpeg", width = lims[1], height = lims[2])
-par(mar = c(0, 0, 0, 0))
-plot(imr)
-dev.off()
-
-# Export aligned Dapi image reference (section 1 st.object.v13tov16)
-lims <- st.object.v13tov16.rotated@dims[[1]][2:3] %>% as.numeric()
-imr <- image_read(st.object.v13tov16.rotated@rasterlists$processed$`1`) %>% 
-  image_scale(paste0(lims[1])) %>% 
-  as.raster()
-jpeg(filename = "results/reference_images/Dapi_aligned.jpeg", width = lims[1], height = lims[2])
-par(mar = c(0, 0, 0, 0))
-plot(imr)
-dev.off()
+# # Export aligned HE image reference (section 1 from st.object.v9tov12.rotated)
+# library(magick)
+# lims <- st.object.v9tov12@dims[[1]][2:3] %>% as.numeric()
+# imr <- image_read(st.object.v9tov12@rasterlists$processed$`1`) %>% 
+#   image_scale(paste0(lims[1])) %>% 
+#   as.raster()
+# jpeg(filename = "results/reference_images/HE_aligned.jpeg", width = lims[1], height = lims[2])
+# par(mar = c(0, 0, 0, 0))
+# plot(imr)
+# dev.off()
+# 
+# # Export aligned Dapi image reference (section 1 st.object.v13tov16)
+# # NOTE: This is the image I used as reference to create the Neun_new.tif
+# lims <- st.object.v13tov16.rotated@dims[[1]][2:3] %>% as.numeric()
+# imr <- image_read(st.object.v13tov16.rotated@rasterlists$processed$`1`) %>% 
+#   image_scale(paste0(lims[1])) %>% 
+#   as.raster()
+# jpeg(filename = "../results/reference_images/Neun_aligned.jpeg", width = lims[1], height = lims[2])
+# par(mar = c(0, 0, 0, 0))
+# plot(imr)
+# dev.off()
 
 ```
 
 
-```{r plot_clone_fkn, fig.width=7, fig.height=6}
+```{r plot_clone_fkn, fig.width=8, fig.height=6}
 
 # Add some dummy color coding vector to show how to color spots by a specific feature
 convert.colors <- c('#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080', '#ffffff')
-names(convert.colors) <- unique(as.character(brain.merge$seurat_clusters))
-brain.merge$colors <- convert.colors[as.character(brain.merge$seurat_clusters)]
+names(convert.colors) <- unique(as.character(all$seurat_clusters))
+all$colors <- convert.colors[as.character(all$seurat_clusters)]
 
-regi <- readRDS(file = "../R_objects/registration_HE_V9")
+regi <- readRDS(file = "../R_objects/registration_Neun_V9")
 
 # Extract polygons
 PolExtract <- function(registration) {
@@ -1000,8 +852,12 @@ d <- PolExtract(regi)
 ggplot() + 
   geom_polygon(data = d, aes(x, y, group = region_combined), fill = d$color, alpha = 1, color = NA) +
   geom_polygon(data = d, aes(x, y, group = region_combined), alpha = 0, color = "black") +
-  theme_void() +
+  #theme_void() +
   scale_y_reverse()
+
+```
+
+```{r PlotFeatures}
 
 #' Function used to draw clones onto Allen reference atlas
 #'
@@ -1019,9 +875,8 @@ ggplot() +
 PlotFeatures <- function (
   object, 
   st.object, 
-  PNG.img,
-  TIF.img,
-  resize = 0.5,
+  ref.img,
+  reg.img,
   polygon.data.frame,
   feature = "cloneID",
   group.by = NULL,
@@ -1030,7 +885,8 @@ PlotFeatures <- function (
   fill.atlas = FALSE,
   selected.clones = "0",
   pt.size = 2,
-  pt.alpha = 1
+  pt.alpha = 1,
+  clone.color = "cyan"
 ) {
   # Check to see that the warped coordinates are present
   if (!all(c("warped_x", "warped_y") %in% colnames(st.object@meta.data))) stop("Warped coordinates are missing in st.object")
@@ -1048,12 +904,11 @@ PlotFeatures <- function (
     if (!group.by %in% colnames(object@meta.data)) stop(paste0("column '", group.by, "' is not present in the Seurat object meta data"))
     gg[, group.by] <- object@meta.data[rownames(gg), group.by]
   }
-  imdims.png <- (image_read(PNG.img) %>% image_info())[2:3] %>% as.numeric()
-  imdims.tif <- ((image_read(TIF.img) %>% image_info())[2:3] %>% as.numeric())/resize
+  imdims.png <- (image_read(ref.img) %>% image_info())[2:3] %>% as.numeric()
+  imdims.tif <- ((image_read(reg.img) %>% image_info())[2:3] %>% as.numeric())#/resize
   
   scale.factor <- imdims.tif[2]/imdims.png[2]
   x_offset <- imdims.tif[1] - imdims.png[1]*scale.factor
-  gg <- gg[gg[, feature] %in% selected.clones, ]
   
   # Select coloring but only if one clone is selected. If multiple clones are selected we have to color them 
   # by clone to distunguish them. If one clone is selected we can instead color them by another reference
@@ -1079,19 +934,16 @@ PlotFeatures <- function (
   }
   
   # Shuffle positions
+  gg <- gg[gg[, feature] %in% selected.clones, ]
   gg <- gg[sample(1:nrow(gg), size = nrow(gg), replace = FALSE), ]
-  
-  # Load reference image and scale to fit dimesnions of reference HE image
-  #im <- image_read(atlas.img) %>% image_scale(paste0(imdims[1], "x", imdims[2])) %>% as.raster()
-  #g <- grid::rasterGrob(im, width = unit(1, "npc"), height = unit(1, "npc"), interpolate = TRUE)
   
   p <- ggplot() 
   
   if (fill.atlas) {
-    p <- p + geom_polygon(data = d, aes(x, imdims.tif[2] - y, group = region_combined), fill = d$color, alpha = 1, color = NA)
+    p <- p + geom_polygon(data = polygon.data.frame, aes(x, imdims.tif[2] - y, group = region_combined), fill = polygon.data.frame$color, alpha = 1, color = NA)
   }
   if (color.atlas) {
-    p <- p + geom_polygon(data = d, aes(x, imdims.tif[2] - y, group = region_combined), alpha = 0, color = "black")
+    p <- p + geom_polygon(data = polygon.data.frame, aes(x, imdims.tif[2] - y, group = region_combined), alpha = 0, color = "black")
   }
   
   if (!is.null(group.by)) {
@@ -1106,6 +958,9 @@ PlotFeatures <- function (
   if (!is.null(region.colors)) {
     p <- p +
       scale_fill_manual(values = region.colors)
+  } else if (!is.null(clone.color) & length(selected.clones) == 1) {
+    p <- p +
+      scale_fill_manual(values = setNames(object = clone.color, nm = selected.clones))
   }
     
   p <- p + 
@@ -1116,49 +971,63 @@ PlotFeatures <- function (
 }
 
 # Plot all clones
-PlotFeatures(object = brain.merge, 
+regi_he <- readRDS(file = "../R_objects/registration_HE_V9")
+d_he <- PolExtract(regi_he)
+PlotFeatures(object = all, 
              st.object = st.object.v9tov12, 
-             selected.clones = "0", 
-             polygon.data.frame = d, # Polygons extracted from registration object
-             PNG.img = "~/Michael_Ratz/cell_segmentation/data/spaceranger/v9/spatial/tissue_hires_image.png", # Image used for alignment with STUtility (check Staffli object : st.object)
-             TIF.img = "~/Michael_Ratz/cell_segmentation/hematoxylin_and_eosin_test/images/he_v9_extended.tif", # Image used for registration (modified version of original HE image, before running spaceranger)
-             pt.alpha = 0.3)
+             feature = "cloneID_all_spots",
+             selected.clones = "3", 
+             polygon.data.frame = d_he, # Polygons extracted from registration object
+             ref.img = "../data/spaceranger/v9/spatial/tissue_hires_image.png", # Image used for alignment with STUtility (check Staffli object : st.object)
+             reg.img = "../output_he_v9_extended/Registration_he_v9_extended_undistorted.png", # Image created during registration
+             pt.alpha = 1)
 
 # Plot selected clone
-PlotFeatures(object = brain.merge, 
+PlotFeatures(object = all, 
              st.object = st.object.v9tov12, 
-             selected.clones = "0", 
-             polygon.data.frame = d,
-             group.by = "seurat_clusters",
-             PNG.img = "~/Michael_Ratz/cell_segmentation/data/spaceranger/v9/spatial/tissue_hires_image.png", 
-             TIF.img = "~/Michael_Ratz/cell_segmentation/hematoxylin_and_eosin_test/images/he_v9_extended.tif",
-             pt.alpha = 0.4, 
-             fill.atlas = T)
+             feature = "cloneID_all_spots",
+             selected.clones = "3", 
+             polygon.data.frame = d_he, # Polygons extracted from registration object
+             ref.img = "../data/spaceranger/v9/spatial/tissue_hires_image.png", # Image used for alignment with STUtility (check Staffli object : st.object)
+             reg.img = "../output_he_v9_extended/Registration_he_v9_extended_undistorted.png", # Image created during registration
+             pt.alpha = 1, 
+             pt.size = 5,
+             fill.atlas = TRUE)
 
 ```
 
 And the same wf for the Neun images
 
 ```{r Neun_plotfeatures}
-library(magick)
-regi <- readRDS(file = "../R_objects/registration_Neun_V9")
 
-d <- PolExtract(regi)
+regi_neun <- readRDS(file = "../R_objects/registration_Neun_V9")
+
+d_neun <- PolExtract(regi_neun)
 ggplot() + 
-  geom_polygon(data = d, aes(x, y, group = region_combined), fill = d$color, alpha = 1, color = NA) +
-  geom_polygon(data = d, aes(x, y, group = region_combined), alpha = 0, color = "black") +
+  geom_polygon(data = d_neun, aes(x, y, group = region_combined), fill = d$color, alpha = 1, color = NA) +
+  geom_polygon(data = d_neun, aes(x, y, group = region_combined), alpha = 0, color = "black") +
   theme_void() +
   scale_y_reverse()
 
 # Plot all clones
-# st.object.v13tov16.rotated <- readRDS("../R_objects/st.object.v13tov16.rotated")
-PlotFeatures(object = brain.merge, 
+PlotFeatures(object = all, 
              st.object = st.object.v13tov16.rotated, 
+             feature = "cloneID_all_spots",
              selected.clones = "0", 
-             polygon.data.frame = d, # Polygons extracted from registration object
-             PNG.img = "~/Michael_Ratz/cell_segmentation/results/reference_images/Dapi_aligned.jpeg", # Image used for alignment with STUtility (check Staffli object : st.object)
-             TIF.img = "~/Michael_Ratz/cell_segmentation/hematoxylin_and_eosin_test/images/Neun_new_small_canvassize.tif", # Image used for registration (modified version of original HE image, before running spaceranger)
+             polygon.data.frame = d_neun, # Polygons extracted from registration object
+             ref.img = "../data/IF/V13/neun_mod.jpg", # Image used for alignment with STUtility (check Staffli object : st.object)
+             reg.img = "../output_Neun_new_small_canvassize/Registration_Neun_new_small_canvassize_undistorted.png", # Image created during registration
              pt.alpha = 0.3)
+
+# Plot selected
+PlotFeatures(object = all, 
+             st.object = st.object.v13tov16.rotated, 
+             feature = "cloneID_all_spots",
+             selected.clones = "3", 
+             polygon.data.frame = d_neun, # Polygons extracted from registration object
+             ref.img = "../data/IF/V13/neun_mod.jpg", # Image used for alignment with STUtility (check Staffli object : st.object)
+             reg.img = "../output_Neun_new_small_canvassize/Registration_Neun_new_small_canvassize_undistorted.png", # Image created during registration
+             pt.alpha = 1)
 
 ```
 

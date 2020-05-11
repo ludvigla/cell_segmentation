@@ -118,52 +118,13 @@ quartz.save('cells_in_atlas_extended.png', type='png')
 # read cells pixel coordinates form external file
 # cells <- read.table('cell_pixel_centroids.csv', sep=',', header =TRUE)
 # get from dataset revious segmentation dataset here instead
-st.object <- readRDS("../R_objects/st.object.v13tov16.rotated")
+st.object.v13tov16.rotated <- readRDS("../R_objects/st.object.v13tov16.rotated")
 
 # Select sample
 # Now we should be able to select any of the V9-V12 samples (here called 1-4) since they are alreasdy aligned
 spots.list <- lapply(1:4, function(s) {
-  setNames(st.object@meta.data[st.object@meta.data$sample == paste0(s), c("warped_x", "warped_y")], nm = c("x", "y"))
+  setNames(st.object.v13tov16.rotated@meta.data[st.object.v13tov16.rotated@meta.data$sample == paste0(s), c("warped_x", "warped_y")], nm = c("x", "y"))
 })
-
-# Here we need to apply the same transformations that were used for the DAPI images
-# First we need to define a couple of tranformation functions:
-
-# rigid translation allows for shifts along x/y axes
-#rigid.transl <- function(h = 0, k = 0) {tr <-  matrix(c(1, 0, 0, 0, 1, 0, h, k, 1), nrow = 3); return(tr)}
-
-# rigid transformation allows for rotations around a specified center
-#rigid.transf <- function(h = 0, k = 0, alpha = 0) {tr <- matrix(c(cos(alpha), -sin(alpha), 0, sin(alpha), cos(alpha), 0, h, k, 1), nrow = 3); return(tr)}
-
-# The rotate function centers the x/y coords at origo, applies the rotation and then transforms back the x/y 
-# coords to their original center
-#rotate <- function(angle, center.cur) {
-#  alpha <- 2*pi*(angle/360)
-#  tr <- rigid.transl(-center.cur[1], -center.cur[2])
-#  tr <- rigid.transf(center.cur[1], center.cur[2], alpha)%*%tr
-#  return(tr)
-#}
-
-# Takes a 3x3 transformation matrix and returns a mapping function
-# generate.map.affine <- function (
-#  tr, 
-#  forward = FALSE
-# ) {
-#   if (forward) {
-#     map.affine <- function (x, y) {
-#       p <- cbind(x, y)
-#       xy <- t(solve(tr)%*%t(cbind(p, 1)))
-#       list(x = xy[, 1], y = xy[, 2])
-#     }
-#   } else {
-#     map.affine <- function (x, y) {
-#       p <- cbind(x, y)
-#       xy <- t(tr%*%t(cbind(p, 1)))
-#       list(x = xy[, 1], y = xy[, 2])
-#     }
-#   }
-#   return(map.affine)
-# }
 
 # Apply rotation of 90 deg anti-clockwise around image center
 ima <- magick::image_read("images/Neun_raw.tif") %>% magick::image_rotate(-90) %>% imager::magick2cimg()
@@ -181,26 +142,9 @@ xy.list <- lapply(spots.list, function(xy) {
   return(xy)
 })
 
-# Check transformation results
-# Now we can see that the coordinates have been transformed -90 deg
-# par(mfrow = c(1, 2))
-# ymax <- 2000 #4464
-# xmax <- 2000
-# plot(spots$x, ymax - spots$y, xlim = c(0, xmax), ylim = c(0, ymax))
-# title(main = "original spots")
-# plot(xy[, 1], ymax - xy[, 2], xlim = c(0, xmax), ylim = c(0, ymax))
-# title(main = "transformed spots")
-
-# We can check if the transformation was correct, i.e. the spots have 
-# rotated -90deg and scaled by a factor of 0.5
-# par(mfrow = c(1, 1))
-# dapi_mod <- readImage(files = imneun_mod)
-# EBImage::display(dapi_mod, method = "raster")
-# points(xy[, 1]*0.5, xy[, 2]*0.5, col = "red")
-
 # Define pixel size and radius
 image.size.micron <- 8705 
-image.size.pixel <- 4464/2
+image.size.pixel <- dim(ima)[1]/2
 pixels.per.um <- (image.size.pixel/image.size.micron)
 pixelsize <- 1/pixels.per.um # micrometer
 spot.radius <- 27.5 # micrometer
@@ -327,7 +271,7 @@ save.image()
 
 
 # Add info to st.object meta.data
-gg <- st.object@meta.data
+gg <- st.object.v13tov16.rotated@meta.data
 datasetSpots <- do.call(rbind, datasetSpots.list)
 gg$acronym <- datasetSpots$acronym
 gg$color <- datasetSpots$color
