@@ -857,7 +857,7 @@ ggplot() +
 
 ```
 
-```{r PlotFeatures}
+```{r PlotFeatures, fig.width=8, fig.height=8}
 
 #' Function used to draw clones onto Allen reference atlas
 #'
@@ -886,7 +886,7 @@ PlotFeatures <- function (
   selected.clones = "0",
   pt.size = 2,
   pt.alpha = 1,
-  clone.color = "cyan"
+  clone.color = NULL
 ) {
   # Check to see that the warped coordinates are present
   if (!all(c("warped_x", "warped_y") %in% colnames(st.object@meta.data))) stop("Warped coordinates are missing in st.object")
@@ -904,21 +904,26 @@ PlotFeatures <- function (
     if (!group.by %in% colnames(object@meta.data)) stop(paste0("column '", group.by, "' is not present in the Seurat object meta data"))
     gg[, group.by] <- object@meta.data[rownames(gg), group.by]
   }
+  if (!is.null(color.by)) {
+    if (!color.by %in% colnames(object@meta.data)) stop(paste0("column '", color.by, "' is not present in the Seurat object meta data"))
+    gg[, color.by] <- object@meta.data[rownames(gg), color.by]
+  }
   imdims.png <- (image_read(ref.img) %>% image_info())[2:3] %>% as.numeric()
   imdims.tif <- ((image_read(reg.img) %>% image_info())[2:3] %>% as.numeric())#/resize
   
   scale.factor <- imdims.tif[2]/imdims.png[2]
   x_offset <- imdims.tif[1] - imdims.png[1]*scale.factor
   
+  #gg$color <- all@meta.data[rownames(gg), "color"]
+  #ggplot(gg, aes(warped_x, warped_y)) + geom_point(color = gg$color)
+  
   # Select coloring but only if one clone is selected. If multiple clones are selected we have to color them 
   # by clone to distunguish them. If one clone is selected we can instead color them by another reference
   if (!is.null(group.by) & !is.null(color.by)) {
     if (!color.by %in% colnames(object@meta.data)) stop(paste0("column '", color.by, "' is not present in the Seurat object meta data"))
     if (length(selected.clones) > 1) stop("Only one clone can be selected when using a group variable")
-    region.colors <- sapply(1:nrow(object), function(i) {
-      setNames(object@meta.data[i, color.by], object@meta.data[i, group.by])
-    })
-    region.colors <- region.colors[!duplicated(names(region.colors))]
+    region.colors <- setNames(na.omit(gg)[, color.by], nm = na.omit(gg)[, group.by])
+    region.colors <- region.colors[unique(names(region.colors))]
   } else if (!is.null(group.by) & is.null(color.by)) {
     if (length(selected.clones) > 1) stop("Only one clone can be selected when using a group variable")
     region.colors <- as.character(sapply(1:nrow(object), function(i) {
@@ -957,7 +962,7 @@ PlotFeatures <- function (
   
   if (!is.null(region.colors)) {
     p <- p +
-      scale_fill_manual(values = region.colors)
+      scale_fill_manual(values = region.colors) 
   } else if (!is.null(clone.color) & length(selected.clones) == 1) {
     p <- p +
       scale_fill_manual(values = setNames(object = clone.color, nm = selected.clones))
@@ -966,7 +971,8 @@ PlotFeatures <- function (
   p <- p + 
     theme_void() +
     scale_x_continuous(limits = c(0, imdims.tif[1]), expand = c(0, 0)) +
-    scale_y_continuous(limits = c(0, imdims.tif[2]), expand = c(0, 0))
+    scale_y_continuous(limits = c(0, imdims.tif[2]), expand = c(0, 0)) +
+    guides(fill=FALSE)
   return(p)
 }
 
@@ -1028,6 +1034,53 @@ PlotFeatures(object = all,
              ref.img = "../data/IF/V13/neun_mod.jpg", # Image used for alignment with STUtility (check Staffli object : st.object)
              reg.img = "../output_Neun_new_small_canvassize/Registration_Neun_new_small_canvassize_undistorted.png", # Image created during registration
              pt.alpha = 1)
+
+```
+
+```{r check_ggs, fig.height=8, fig.width=22}
+
+gg1 <- readRDS("~/Michael_Ratz/cell_segmentation/data/gg_wholebrain_v9tov12.rds")
+gg2 <- readRDS("~/Michael_Ratz/cell_segmentation/data/gg_wholebrain_v13tov16.rds")
+
+all$region <- NA
+all$color <- NA
+
+all@meta.data[rownames(gg1), "region"] <- gg1$name
+all@meta.data[rownames(gg1), "color"] <- gg1$color
+all@meta.data[rownames(gg2), "region"] <- gg2$name
+all@meta.data[rownames(gg2), "color"] <- gg2$color
+
+
+
+# Color by "region_color"
+p1 <- PlotFeatures(object = all, 
+             st.object = st.object.v9tov12, 
+             feature = "cloneID_all_spots",
+             selected.clones = "0", 
+             polygon.data.frame = d_he, # Polygons extracted from registration object
+             ref.img = "../data/spaceranger/v9/spatial/tissue_hires_image.png", # Image used for alignment with STUtility (check Staffli object : st.object)
+             reg.img = "../output_he_v9_extended/Registration_he_v9_extended_undistorted.png", # Image created during registration
+             pt.alpha = 1, 
+             pt.size = 2,
+             group.by = "region",
+             color.by = "color",
+             fill.atlas = TRUE)
+
+# Color by "region_color"
+p2 <- PlotFeatures(object = all, 
+             st.object = st.object.v9tov12, 
+             feature = "cloneID_all_spots",
+             selected.clones = "0", 
+             polygon.data.frame = d_he, # Polygons extracted from registration object
+             ref.img = "../data/spaceranger/v9/spatial/tissue_hires_image.png", # Image used for alignment with STUtility (check Staffli object : st.object)
+             reg.img = "../output_he_v9_extended/Registration_he_v9_extended_undistorted.png", # Image created during registration
+             pt.alpha = 0, 
+             pt.size = 2,
+             group.by = "region",
+             color.by = "color",
+             fill.atlas = TRUE)
+
+cowplot::plot_grid(p1, p2)
 
 ```
 
