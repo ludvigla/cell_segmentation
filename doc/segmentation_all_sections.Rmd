@@ -971,8 +971,7 @@ PlotFeatures <- function (
   p <- p + 
     theme_void() +
     scale_x_continuous(limits = c(0, imdims.tif[1]), expand = c(0, 0)) +
-    scale_y_continuous(limits = c(0, imdims.tif[2]), expand = c(0, 0)) +
-    guides(fill=FALSE)
+    scale_y_continuous(limits = c(0, imdims.tif[2]), expand = c(0, 0)) 
   return(p)
 }
 
