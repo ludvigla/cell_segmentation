@@ -8,6 +8,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r load_libs}
+
 library(EBImage)
 library(ggplot2)
 library(cowplot)
